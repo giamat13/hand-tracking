@@ -1,9 +1,22 @@
 """
 זיהוי ידיים והזזתם - Hand Detection & Gesture Tracking
 ========================================================
-דרישות: pip install opencv-python mediapipe numpy
+דרישות: pip install opencv-python mediapipe numpy pyautogui
 הפעלה: python main.py
 """
+
+import subprocess, sys
+
+def install_deps():
+    pkgs = ["opencv-python", "mediapipe", "numpy", "pyautogui"]
+    for pkg in pkgs:
+        try:
+            __import__(pkg.replace("-", "_").split("_python")[0])
+        except ImportError:
+            print(f"Installing {pkg}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"])
+
+install_deps()
 
 import cv2
 import numpy as np
@@ -69,12 +82,20 @@ HAND_CONNECTIONS = [
     (0,17)
 ]
 
+# ── סטטוס טעינה ────────────────────────────────────────────────────
+loading_status = "Starting..."
+
+def set_status(msg):
+    global loading_status
+    loading_status = msg
+    print(msg)
+
 # ── חלון טעינה ────────────────────────────────────────────────────
 def show_loading_window(root, check_queue):
-    root.title("Hand Tracker")
+    root.title("Hand Tracker - Loading")
     root.configure(bg="#0a0a0a")
     root.resizable(False, False)
-    w, h = 400, 260
+    w, h = 420, 280
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
     root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
     root.overrideredirect(True)
@@ -82,77 +103,66 @@ def show_loading_window(root, check_queue):
     canvas = tk.Canvas(root, width=w, height=h, bg="#0a0a0a", highlightthickness=0)
     canvas.pack()
 
-    # מסגרת
     canvas.create_rectangle(2, 2, w-2, h-2, outline="#00ff96", width=1)
-
-    # כותרת
-    canvas.create_text(w//2, 55, text="HAND TRACKER",
+    canvas.create_text(w//2, 50, text="HAND TRACKER",
                        font=("Consolas", 22, "bold"), fill="#00ff96")
-    canvas.create_text(w//2, 85, text="Initializing model...",
-                       font=("Consolas", 10), fill="#888888")
 
     # ספינר
-    cx, cy, r = w//2, 155, 35
+    cx, cy, r = w//2, 145, 35
     arcs = []
     for i in range(12):
-        angle = i * 30
         arc = canvas.create_arc(cx-r, cy-r, cx+r, cy+r,
-                                start=angle, extent=20,
+                                start=i*30, extent=20,
                                 outline="#00ff96", width=3, style="arc")
         arcs.append(arc)
 
-    # טקסט נקודות
-    dots_id = canvas.create_text(w//2, 210, text="Loading",
-                                 font=("Consolas", 11), fill="#cccccc")
+    status_id = canvas.create_text(w//2, 205, text="Starting...",
+                                   font=("Consolas", 10), fill="#00ff96")
+    dots_id   = canvas.create_text(w//2, 235, text="",
+                                   font=("Consolas", 9), fill="#555555")
 
     angle_offset = [0]
     dot_count    = [0]
     dot_timer    = [time.time()]
 
     def animate():
-        if model_ready or model_error:
-            if not camera_ready:
-                root.after(40, animate)
-                return
+        if (model_ready or model_error) and camera_ready:
             root.overrideredirect(False)
             root.withdraw()
             check_queue()
             return
-        # סובב ספינר
-        angle_offset[0] = (angle_offset[0] + 5) % 360
+        angle_offset[0] = (angle_offset[0] + 6) % 360
         for i, arc in enumerate(arcs):
             start = (i * 30 + angle_offset[0]) % 360
-            brightness = int(80 + 175 * (i / 12))
-            color = f"#{0:02x}{brightness:02x}{brightness//2:02x}"
-            canvas.itemconfig(arc, start=start, outline=color)
-        # עדכן נקודות
+            brightness = int(60 + 195 * (i / 12))
+            canvas.itemconfig(arc, start=start, outline=f"#00{brightness:02x}{brightness//2:02x}")
+        canvas.itemconfig(status_id, text=loading_status)
         if time.time() - dot_timer[0] > 0.5:
             dot_count[0] = (dot_count[0] + 1) % 4
-            canvas.itemconfig(dots_id, text="Loading" + "." * dot_count[0])
+            canvas.itemconfig(dots_id, text="● " * dot_count[0])
             dot_timer[0] = time.time()
         root.after(40, animate)
 
     animate()
-    root.mainloop()
 
 # ── טעינת מודל ב-background ────────────────────────────────────────
 def load_model():
     global detector, hands_old, mp_hands, mp_draw, USE_NEW_API, model_ready, model_error
     try:
+        set_status("Importing mediapipe...")
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python.vision import HandLandmarkerOptions, HandLandmarker
         import urllib.request, os
 
         MODEL_PATH = "hand_landmarker.task"
         if not os.path.exists(MODEL_PATH):
-            print("Downloading hand model (~9MB)...")
+            set_status("Downloading hand model (~9MB)...")
             urllib.request.urlretrieve(
                 "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
                 "hand_landmarker/float16/1/hand_landmarker.task",
                 MODEL_PATH
             )
-            print("Model downloaded!")
-
+        set_status("Loading hand model...")
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         options = HandLandmarkerOptions(
             base_options=base_options,
@@ -163,10 +173,11 @@ def load_model():
         )
         detector    = HandLandmarker.create_from_options(options)
         USE_NEW_API = True
-        print("Using NEW mediapipe API (0.10+)")
+        set_status("Model ready (new API)")
 
     except Exception:
         try:
+            set_status("Trying legacy mediapipe API...")
             mp_hands  = mp.solutions.hands
             mp_draw   = mp.solutions.drawing_utils
             hands_old = mp_hands.Hands(
@@ -175,10 +186,10 @@ def load_model():
                 min_detection_confidence=0.7,
                 min_tracking_confidence=0.6
             )
-            print("Using OLD mediapipe API (0.9.x)")
+            set_status("Model ready (legacy API)")
         except Exception as e:
             model_error = str(e)
-            print(f"ERROR loading mediapipe: {e}")
+            set_status(f"ERROR: {e}")
             return
 
     model_ready = True
@@ -530,19 +541,19 @@ def main():
 
 def run_camera():
     global prev_time, camera_ready
+    set_status("Opening camera...")
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("ERROR: Camera not found.")
+        set_status("ERROR: Camera not found")
         return
-
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    set_status("Camera ready")
     camera_ready = True
 
     screenshot_cnt = 0
     dots           = 0
     dot_timer      = time.time()
-    print("Window open - model loading in background...")
 
     while True:
         ret, frame = cap.read()
