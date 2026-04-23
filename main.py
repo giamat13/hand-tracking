@@ -54,7 +54,7 @@ SMOOTH          = 7      # 0=עצלן 100=מהיר (100 = 0.07 הישן)
 SPEED           = 5      # מכפיל מהירות עכבר
 CAM_MARGIN      = 0.15   # חתך משולי המצלמה למיפוי מלא למסך
 DEADZONE        = 8      # פיקסלים - מתחת לזה לא זז
-MOUSE_ENABLED   = True   # האם לשלוט בעכבר
+MOUSE_ENABLED   = False  # האם לשלוט בעכבר
 CONTROL_HAND    = "Right" # איזו יד שולטת - Right/Left/Both
 CLICK_COOLDOWN  = 0.6    # שניות בין קליקים
 SHOW_TRAIL      = True   # הצג שובל
@@ -315,10 +315,10 @@ def _show_settings_window():
     root.configure(bg="#0f0f0f")
     root.resizable(False, False)
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    w, h = 420, 520
+    w, h = 440, 560
     root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
-    BG, FG, ACC = "#0f0f0f", "#eeeeee", "#00ff96"
+    BG, FG, ACC, DIM = "#0f0f0f", "#eeeeee", "#00ff96", "#555555"
     tk.Label(root, text="HAND TRACKER  SETTINGS", bg=BG, fg=ACC,
              font=("Consolas", 14, "bold")).pack(pady=(18,12))
 
@@ -327,37 +327,63 @@ def _show_settings_window():
 
     def row(label, widget_fn, row_i):
         tk.Label(frame, text=label, bg=BG, fg=FG, font=("Consolas", 10),
-                 anchor="w", width=22).grid(row=row_i, column=0, pady=6, sticky="w")
+                 anchor="w", width=22).grid(row=row_i, column=0, pady=4, sticky="w")
         ww = widget_fn(frame)
-        ww.grid(row=row_i, column=1, pady=6, sticky="ew")
+        ww.grid(row=row_i, column=1, pady=4, sticky="ew")
         return ww
 
-    slider_style = dict(bg=BG, fg=FG, troughcolor="#333", activebackground=ACC,
-                        highlightthickness=0, length=180, orient="horizontal")
+    slider_style     = dict(bg=BG, fg=FG, troughcolor="#333", activebackground=ACC,
+                            highlightthickness=0, length=180, orient="horizontal")
+    slider_style_dim = dict(bg=BG, fg=DIM, troughcolor="#222", activebackground=DIM,
+                            highlightthickness=0, length=180, orient="horizontal", state="disabled")
+
+    # תצוגה
+    trail_var  = tk.BooleanVar(value=SHOW_TRAIL)
+    coords_var = tk.BooleanVar(value=SHOW_COORDS)
+    row("Show trail",       lambda f: tk.Checkbutton(f, variable=trail_var,  bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 0)
+    row("Show coordinates", lambda f: tk.Checkbutton(f, variable=coords_var, bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 1)
+
+    # קו מפריד
+    tk.Frame(frame, bg="#333", height=1).grid(row=2, column=0, columnspan=2, sticky="ew", pady=8)
+
+    # כותרת קטגוריית עכבר
+    mouse_var = tk.BooleanVar(value=MOUSE_ENABLED)
+    mouse_lbl = tk.Label(frame, text="▼  Mouse Control", bg=BG, fg=ACC, font=("Consolas", 10, "bold"), anchor="w")
+    mouse_lbl.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4,2))
+    tk.Checkbutton(frame, text="Enable", variable=mouse_var, bg=BG, fg=FG,
+                   selectcolor="#333", activebackground=BG, font=("Consolas",10)).grid(row=4, column=1, sticky="w")
+    tk.Label(frame, text="Enable mouse", bg=BG, fg=FG, font=("Consolas",10), anchor="w", width=22).grid(row=4, column=0, sticky="w")
 
     smooth_var   = tk.IntVar(value=SMOOTH)
     speed_var    = tk.IntVar(value=SPEED)
     dead_var     = tk.IntVar(value=DEADZONE)
     cooldown_var = tk.DoubleVar(value=CLICK_COOLDOWN)
-    mouse_var    = tk.BooleanVar(value=MOUSE_ENABLED)
-    trail_var    = tk.BooleanVar(value=SHOW_TRAIL)
-    coords_var   = tk.BooleanVar(value=SHOW_COORDS)
     hand_var     = tk.StringVar(value=CONTROL_HAND)
 
-    row("Smoothing (1-100)", lambda f: tk.Scale(f, from_=1, to=100, variable=smooth_var, **slider_style), 0)
-    row("Speed (1-10)",      lambda f: tk.Scale(f, from_=1, to=10,  variable=speed_var,  **slider_style), 1)
-    row("Deadzone (px)",     lambda f: tk.Scale(f, from_=0, to=40,  variable=dead_var,   **slider_style), 2)
-    row("Click cooldown (s)",lambda f: tk.Scale(f, from_=0.1, to=2.0, resolution=0.1, variable=cooldown_var, **slider_style), 3)
-    row("Mouse control",     lambda f: tk.Checkbutton(f, variable=mouse_var, bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 4)
-    row("Show trail",        lambda f: tk.Checkbutton(f, variable=trail_var,  bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 5)
-    row("Show coordinates",  lambda f: tk.Checkbutton(f, variable=coords_var, bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 6)
+    s_smooth   = row("Smoothing (1-100)", lambda f: tk.Scale(f, from_=1, to=100, variable=smooth_var,   **slider_style), 5)
+    s_speed    = row("Speed (1-10)",      lambda f: tk.Scale(f, from_=1, to=10,  variable=speed_var,    **slider_style), 6)
+    s_dead     = row("Deadzone (px)",     lambda f: tk.Scale(f, from_=0, to=40,  variable=dead_var,     **slider_style), 7)
+    s_cooldown = row("Click cooldown (s)",lambda f: tk.Scale(f, from_=0.1, to=2.0, resolution=0.1, variable=cooldown_var, **slider_style), 8)
 
-    tk.Label(frame, text="Control hand", bg=BG, fg=FG, font=("Consolas",10), anchor="w", width=22).grid(row=7, column=0, pady=6, sticky="w")
+    tk.Label(frame, text="Control hand", bg=BG, fg=FG, font=("Consolas",10), anchor="w", width=22).grid(row=9, column=0, pady=4, sticky="w")
     hf = tk.Frame(frame, bg=BG)
-    hf.grid(row=7, column=1, sticky="w")
+    hf.grid(row=9, column=1, sticky="w")
+    radio_btns = []
     for val in ("Right", "Left", "Both"):
-        tk.Radiobutton(hf, text=val, variable=hand_var, value=val, bg=BG, fg=FG,
-                       selectcolor="#333", activebackground=BG, font=("Consolas",10)).pack(side="left")
+        rb = tk.Radiobutton(hf, text=val, variable=hand_var, value=val, bg=BG, fg=FG,
+                            selectcolor="#333", activebackground=BG, font=("Consolas",10))
+        rb.pack(side="left")
+        radio_btns.append(rb)
+
+    mouse_widgets = [s_smooth, s_speed, s_dead, s_cooldown] + radio_btns
+
+    def update_mouse_widgets(*_):
+        enabled = mouse_var.get()
+        for ww in mouse_widgets:
+            ww.config(state="normal" if enabled else "disabled")
+
+    mouse_var.trace_add("write", update_mouse_widgets)
+    update_mouse_widgets()
 
     def apply():
         global SMOOTH, SPEED, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open
@@ -373,7 +399,7 @@ def _show_settings_window():
         root.destroy()
 
     tk.Button(root, text="Apply", command=apply, bg=ACC, fg="#000",
-              font=("Consolas", 11, "bold"), relief="flat", padx=20, pady=6).pack(pady=20)
+              font=("Consolas", 11, "bold"), relief="flat", padx=20, pady=6).pack(pady=16)
     root.protocol("WM_DELETE_WINDOW", on_close)
 
 def move_mouse(lm_list, gesture):
@@ -551,6 +577,8 @@ def run_camera():
         key = cv2.waitKey(1) & 0xFF
         if key == 27:
             break
+        elif cv2.getWindowProperty("Hand Tracker", cv2.WND_PROP_VISIBLE) < 1:
+            break
         elif key in (ord('g'), ord('G')):
             threading.Thread(target=open_settings, daemon=True).start()
         elif key in (ord('s'), ord('S')):
@@ -561,7 +589,8 @@ def run_camera():
 
     cap.release()
     cv2.destroyAllWindows()
-    print("Done!")
+    import os
+    os.kill(os.getpid(), 9)
 
 if __name__ == "__main__":
     main()
