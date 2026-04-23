@@ -1,6 +1,6 @@
 """
-זיהוי ידיים והזזתם - Hand Detection & Gesture Tracking
-========================================================
+Handy - Hand Detection & Gesture Tracking
+==========================================
 דרישות: pip install opencv-python mediapipe numpy pyautogui
 הפעלה: python main.py
 """
@@ -92,7 +92,7 @@ def set_status(msg):
 
 # ── חלון טעינה ────────────────────────────────────────────────────
 def show_loading_window(root, check_queue):
-    root.title("Hand Tracker - Loading")
+    root.title("Handy - Loading")
     root.configure(bg="#0a0a0a")
     root.resizable(False, False)
     w, h = 420, 280
@@ -104,7 +104,7 @@ def show_loading_window(root, check_queue):
     canvas.pack()
 
     canvas.create_rectangle(2, 2, w-2, h-2, outline="#00ff96", width=1)
-    canvas.create_text(w//2, 50, text="HAND TRACKER",
+    canvas.create_text(w//2, 50, text="HANDY",
                        font=("Consolas", 22, "bold"), fill="#00ff96")
 
     # ספינר
@@ -258,7 +258,7 @@ def draw_info_box(frame, label, wx, wy, color):
 def draw_ui(frame, fps, hand_count):
     h, w = frame.shape[:2]
     cv2.rectangle(frame, (0,0), (w,50), (10,10,10), -1)
-    cv2.putText(frame, "HAND TRACKER  |  ESC = quit  |  S = screenshot  |  G = settings",
+    cv2.putText(frame, "HANDY  |  ESC = quit  |  S = screenshot  |  G = settings",
                 (12,32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_TEXT, 1, cv2.LINE_AA)
     cv2.putText(frame, f"FPS: {fps:.0f}", (w-120,32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, COLOR_TRAIL, 2, cv2.LINE_AA)
@@ -322,7 +322,7 @@ def open_settings():
 def _show_settings_window():
     global SMOOTH, SPEED, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open
     root = tk.Toplevel()
-    root.title("Settings")
+    root.title("Handy - Settings")
     root.configure(bg="#0f0f0f")
     root.resizable(False, False)
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
@@ -330,7 +330,7 @@ def _show_settings_window():
     root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
     BG, FG, ACC, DIM = "#0f0f0f", "#eeeeee", "#00ff96", "#555555"
-    tk.Label(root, text="HAND TRACKER  SETTINGS", bg=BG, fg=ACC,
+    tk.Label(root, text="HANDY  SETTINGS", bg=BG, fg=ACC,
              font=("Consolas", 14, "bold")).pack(pady=(18,12))
 
     frame = tk.Frame(root, bg=BG)
@@ -583,12 +583,12 @@ def run_camera():
             hand_count = process_frame(frame, h, w)
             draw_ui(frame, fps_avg, hand_count)
 
-        cv2.imshow("Hand Tracker", frame)
+        cv2.imshow("Handy", frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == 27:
             break
-        elif cv2.getWindowProperty("Hand Tracker", cv2.WND_PROP_VISIBLE) < 1:
+        elif cv2.getWindowProperty("Handy", cv2.WND_PROP_VISIBLE) < 1:
             break
         elif key in (ord('g'), ord('G')):
             threading.Thread(target=open_settings, daemon=True).start()
