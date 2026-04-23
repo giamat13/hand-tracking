@@ -14,10 +14,12 @@ from collections import deque
 import mediapipe as mp
 import tkinter as tk
 import pyautogui
+import queue
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE    = 0
 SCREEN_W, SCREEN_H = pyautogui.size()
+ui_queue = queue.Queue()
 
 # ── מצב טעינה ─────────────────────────────────────────────────────
 USE_NEW_API   = False
@@ -27,6 +29,7 @@ mp_hands      = None
 mp_draw       = None
 model_ready   = False   # True כשהמודל מוכן
 model_error   = None    # שגיאה אם נכשל
+camera_ready  = False   # True כשהמצלמה נפתחה
 
 # ── קבועים ─────────────────────────────────────────────────────────
 FINGER_TIPS  = [4, 8, 12, 16, 20]
@@ -39,11 +42,15 @@ COLOR_TEXT   = (255, 255, 255)
 trails     = {}
 fps_buffer = deque(maxlen=30)
 prev_time  = time.time()
-smooth_x   = None
-smooth_y   = None
+smooth_x    = None
+smooth_y    = None
+prev_hand_x = None
+prev_hand_y = None
 
 # ── הגדרות (ניתן לשנות דרך חלון ההגדרות) ──────────────────────────
 SMOOTH          = 7      # 0=עצלן 100=מהיר (100 = 0.07 הישן)
+SPEED           = 3      # מכפיל מהירות עכבר
+CAM_MARGIN      = 0.15   # חתך משולי המצלמה למיפוי מלא למסך
 DEADZONE        = 8      # פיקסלים - מתחת לזה לא זז
 MOUSE_ENABLED   = True   # האם לשלוט בעכבר
 CONTROL_HAND    = "Right" # איזו יד שולטת - Right/Left/Both
@@ -61,8 +68,7 @@ HAND_CONNECTIONS = [
 ]
 
 # ── חלון טעינה ────────────────────────────────────────────────────
-def show_loading_window():
-    root = tk.Tk()
+def show_loading_window(root, check_queue):
     root.title("Hand Tracker")
     root.configure(bg="#0a0a0a")
     root.resizable(False, False)
@@ -103,7 +109,12 @@ def show_loading_window():
 
     def animate():
         if model_ready or model_error:
-            root.destroy()
+            if not camera_ready:
+                root.after(40, animate)
+                return
+            root.overrideredirect(False)
+            root.withdraw()
+            check_queue()
             return
         # סובב ספינר
         angle_offset[0] = (angle_offset[0] + 5) % 360
@@ -289,21 +300,23 @@ last_click = 0
 settings_open = False
 
 def open_settings():
-    global SMOOTH, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open
+    global settings_open
     if settings_open:
         return
     settings_open = True
+    ui_queue.put("open_settings")
 
-    root = tk.Tk()
+def _show_settings_window():
+    global SMOOTH, SPEED, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open
+    root = tk.Toplevel()
     root.title("Settings")
     root.configure(bg="#0f0f0f")
     root.resizable(False, False)
     sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    w, h = 420, 480
+    w, h = 420, 520
     root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
-    BG, FG, ACC, ENTRY_BG = "#0f0f0f", "#eeeeee", "#00ff96", "#1e1e1e"
-
+    BG, FG, ACC = "#0f0f0f", "#eeeeee", "#00ff96"
     tk.Label(root, text="HAND TRACKER  SETTINGS", bg=BG, fg=ACC,
              font=("Consolas", 14, "bold")).pack(pady=(18,12))
 
@@ -313,67 +326,43 @@ def open_settings():
     def row(label, widget_fn, row_i):
         tk.Label(frame, text=label, bg=BG, fg=FG, font=("Consolas", 10),
                  anchor="w", width=22).grid(row=row_i, column=0, pady=6, sticky="w")
-        w = widget_fn(frame)
-        w.grid(row=row_i, column=1, pady=6, sticky="ew")
-        return w
+        ww = widget_fn(frame)
+        ww.grid(row=row_i, column=1, pady=6, sticky="ew")
+        return ww
 
     slider_style = dict(bg=BG, fg=FG, troughcolor="#333", activebackground=ACC,
                         highlightthickness=0, length=180, orient="horizontal")
 
-    # Smooth
-    smooth_var = tk.IntVar(value=SMOOTH)
-    row("Smoothing (0-100)", lambda f: tk.Scale(f, from_=1, to=100,
-        variable=smooth_var, **slider_style), 0)
-
-    # Deadzone
-    dead_var = tk.IntVar(value=DEADZONE)
-    row("Deadzone (px)", lambda f: tk.Scale(f, from_=0, to=40,
-        variable=dead_var, **slider_style), 1)
-
-    # Click cooldown
+    smooth_var   = tk.IntVar(value=SMOOTH)
+    speed_var    = tk.IntVar(value=SPEED)
+    dead_var     = tk.IntVar(value=DEADZONE)
     cooldown_var = tk.DoubleVar(value=CLICK_COOLDOWN)
-    row("Click cooldown (s)", lambda f: tk.Scale(f, from_=0.1, to=2.0,
-        resolution=0.1, variable=cooldown_var, **slider_style), 2)
+    mouse_var    = tk.BooleanVar(value=MOUSE_ENABLED)
+    trail_var    = tk.BooleanVar(value=SHOW_TRAIL)
+    coords_var   = tk.BooleanVar(value=SHOW_COORDS)
+    hand_var     = tk.StringVar(value=CONTROL_HAND)
 
-    # Mouse enabled
-    mouse_var = tk.BooleanVar(value=MOUSE_ENABLED)
-    row("Mouse control", lambda f: tk.Checkbutton(f, variable=mouse_var,
-        bg=BG, fg=FG, selectcolor="#333", activebackground=BG,
-        font=("Consolas", 10)), 3)
+    row("Smoothing (1-100)", lambda f: tk.Scale(f, from_=1, to=100, variable=smooth_var, **slider_style), 0)
+    row("Speed (1-10)",      lambda f: tk.Scale(f, from_=1, to=10,  variable=speed_var,  **slider_style), 1)
+    row("Deadzone (px)",     lambda f: tk.Scale(f, from_=0, to=40,  variable=dead_var,   **slider_style), 2)
+    row("Click cooldown (s)",lambda f: tk.Scale(f, from_=0.1, to=2.0, resolution=0.1, variable=cooldown_var, **slider_style), 3)
+    row("Mouse control",     lambda f: tk.Checkbutton(f, variable=mouse_var, bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 4)
+    row("Show trail",        lambda f: tk.Checkbutton(f, variable=trail_var,  bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 5)
+    row("Show coordinates",  lambda f: tk.Checkbutton(f, variable=coords_var, bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 6)
 
-    # Show trail
-    trail_var = tk.BooleanVar(value=SHOW_TRAIL)
-    row("Show trail", lambda f: tk.Checkbutton(f, variable=trail_var,
-        bg=BG, fg=FG, selectcolor="#333", activebackground=BG,
-        font=("Consolas", 10)), 4)
-
-    # Show coords
-    coords_var = tk.BooleanVar(value=SHOW_COORDS)
-    row("Show coordinates", lambda f: tk.Checkbutton(f, variable=coords_var,
-        bg=BG, fg=FG, selectcolor="#333", activebackground=BG,
-        font=("Consolas", 10)), 5)
-
-    # Control hand
-    hand_var = tk.StringVar(value=CONTROL_HAND)
-    tk.Label(frame, text="Control hand", bg=BG, fg=FG, font=("Consolas", 10),
-             anchor="w", width=22).grid(row=6, column=0, pady=6, sticky="w")
+    tk.Label(frame, text="Control hand", bg=BG, fg=FG, font=("Consolas",10), anchor="w", width=22).grid(row=7, column=0, pady=6, sticky="w")
     hf = tk.Frame(frame, bg=BG)
-    hf.grid(row=6, column=1, sticky="w")
+    hf.grid(row=7, column=1, sticky="w")
     for val in ("Right", "Left", "Both"):
-        tk.Radiobutton(hf, text=val, variable=hand_var, value=val,
-                       bg=BG, fg=FG, selectcolor="#333", activebackground=BG,
-                       font=("Consolas", 10)).pack(side="left")
+        tk.Radiobutton(hf, text=val, variable=hand_var, value=val, bg=BG, fg=FG,
+                       selectcolor="#333", activebackground=BG, font=("Consolas",10)).pack(side="left")
 
     def apply():
-        global SMOOTH, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open
-        SMOOTH         = int(smooth_var.get())
-        DEADZONE       = dead_var.get()
-        CLICK_COOLDOWN = cooldown_var.get()
-        MOUSE_ENABLED  = mouse_var.get()
-        SHOW_TRAIL     = trail_var.get()
-        SHOW_COORDS    = coords_var.get()
-        CONTROL_HAND   = hand_var.get()
-        settings_open  = False
+        global SMOOTH, SPEED, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open
+        SMOOTH, SPEED, DEADZONE = int(smooth_var.get()), speed_var.get(), dead_var.get()
+        CLICK_COOLDOWN, MOUSE_ENABLED = cooldown_var.get(), mouse_var.get()
+        SHOW_TRAIL, SHOW_COORDS, CONTROL_HAND = trail_var.get(), coords_var.get(), hand_var.get()
+        settings_open = False
         root.destroy()
 
     def on_close():
@@ -382,28 +371,29 @@ def open_settings():
         root.destroy()
 
     tk.Button(root, text="Apply", command=apply, bg=ACC, fg="#000",
-              font=("Consolas", 11, "bold"), relief="flat",
-              padx=20, pady=6).pack(pady=20)
+              font=("Consolas", 11, "bold"), relief="flat", padx=20, pady=6).pack(pady=20)
     root.protocol("WM_DELETE_WINDOW", on_close)
-    root.mainloop()
 
 def move_mouse(lm_list, gesture):
-    global smooth_x, smooth_y, last_click
-    if not MOUSE_ENABLED or gesture == "Fist":
+    global smooth_x, smooth_y, last_click, prev_hand_x, prev_hand_y
+    if not MOUSE_ENABLED:
         return
     tx, ty = lm_list[8][0], lm_list[8][1]
-    mx, my = int(tx * SCREEN_W), int(ty * SCREEN_H)
-    if smooth_x is None:
-        smooth_x, smooth_y = mx, my
-    s = SMOOTH / 100
-    prev_x, prev_y = smooth_x, smooth_y
-    smooth_x = max(0, min(SCREEN_W - 1, int(smooth_x + s * (mx - smooth_x))))
-    smooth_y = max(0, min(SCREEN_H - 1, int(smooth_y + s * (my - smooth_y))))
-    if abs(smooth_x - prev_x) > DEADZONE or abs(smooth_y - prev_y) > DEADZONE:
+    if gesture == "Fist":
+        prev_hand_x, prev_hand_y = tx, ty
+        return
+    if prev_hand_x is None:
+        prev_hand_x, prev_hand_y = tx, ty
+        cx, cy = pyautogui.position()
+        smooth_x, smooth_y = cx, cy
+        return
+    dx = (tx - prev_hand_x) * SCREEN_W * (SMOOTH / 7) * SPEED
+    dy = (ty - prev_hand_y) * SCREEN_H * (SMOOTH / 7) * SPEED
+    prev_hand_x, prev_hand_y = tx, ty
+    smooth_x = max(0, min(SCREEN_W - 1, int(smooth_x + dx)))
+    smooth_y = max(0, min(SCREEN_H - 1, int(smooth_y + dy)))
+    if abs(dx) > DEADZONE or abs(dy) > DEADZONE:
         pyautogui.moveTo(smooth_x, smooth_y)
-    if gesture == "4 Fingers" and time.time() - last_click > CLICK_COOLDOWN:
-        pyautogui.click()
-        last_click = time.time()
     if gesture == "4 Fingers" and time.time() - last_click > CLICK_COOLDOWN:
         pyautogui.click()
         last_click = time.time()
@@ -452,7 +442,7 @@ def draw_hand(frame, idx, lm_list, label, h, w, use_mp_draw=False, hand_lm_raw=N
 
 # ── עיבוד פריים ────────────────────────────────────────────────────
 def process_frame(frame, h, w):
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)    
 
     if USE_NEW_API:
         mp_image  = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
@@ -485,14 +475,28 @@ def process_frame(frame, h, w):
 
 # ── לולאה ראשית ─────────────────────────────────────────────────────
 def main():
-    global prev_time
+    global prev_time, camera_ready
 
-    # הפעל טעינת מודל ב-background
-    t = threading.Thread(target=load_model, daemon=True)
-    t.start()
+    threading.Thread(target=load_model, daemon=True).start()
+    threading.Thread(target=run_camera, daemon=True).start()
 
-    threading.Thread(target=show_loading_window, daemon=True).start()
+    root = tk.Tk()
 
+    def check_queue():
+        try:
+            while True:
+                msg = ui_queue.get_nowait()
+                if msg == "open_settings":
+                    _show_settings_window()
+        except queue.Empty:
+            pass
+        root.after(100, check_queue)
+
+    show_loading_window(root, check_queue)
+    root.mainloop()
+
+def run_camera():
+    global prev_time, camera_ready
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("ERROR: Camera not found.")
@@ -500,6 +504,7 @@ def main():
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    camera_ready = True
 
     screenshot_cnt = 0
     dots           = 0
