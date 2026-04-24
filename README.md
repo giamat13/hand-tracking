@@ -32,6 +32,30 @@ python main.py
 
 On first run, the model file `hand_landmarker.task` (~9MB) will be downloaded automatically.
 
+## Build Outputs
+
+To create the standalone app executable:
+
+```bash
+python build_exe.py
+```
+
+This creates `release/Handy.exe`.
+
+To create a real Windows installer (`Program Files`, Start Menu shortcut, desktop shortcut option, uninstall entry):
+
+```bash
+python build_setup.py
+```
+
+This creates `release/Handy-Setup.exe`.
+
+`build_setup.py` requires Inno Setup 6. If it is not installed yet, install it first:
+
+```bash
+winget install JRSoftware.InnoSetup
+```
+
 ## Gestures
 
 | Gesture | Description |

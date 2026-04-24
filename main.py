@@ -33,6 +33,7 @@ import math
 from collections import deque  
 import mediapipe as mp
 import tkinter as tk
+from tkinter import messagebox
 import pyautogui
 import queue
 
@@ -50,6 +51,7 @@ mp_draw       = None
 model_ready   = False   # True כשהמודל מוכן
 model_error   = None    # שגיאה אם נכשל
 camera_ready  = False   # True כשהמצלמה נפתחה
+camera_error  = None    # שגיאה אם פתיחת המצלמה נכשלה
 
 # ── debug / hot-reload ──────────────────────────────────────────────
 DEBUG_MODE   = False   # מופעל מהגדרות
@@ -206,9 +208,13 @@ def show_loading_window(root, check_queue):
     dot_timer    = [time.time()]
 
     def animate():
-        if (model_ready or model_error) and camera_ready:
+        if (model_ready or model_error) and (camera_ready or camera_error):
             root.overrideredirect(False)
-            root.withdraw()
+            if camera_error and not camera_ready:
+                root.after(0, lambda: messagebox.showerror("Handy - Camera Error", camera_error))
+                root.after(0, root.destroy)
+            else:
+                root.withdraw()
             return
         angle_offset[0] = (angle_offset[0] + 6) % 360
         for i, arc in enumerate(arcs):
@@ -716,9 +722,10 @@ def process_frame(frame, h, w):
 _FORKED_RELOAD = False  # מוגדר True אחרי fork
 
 def main():
-    global prev_time, camera_ready, DEBUG_MODE
+    global prev_time, camera_ready, camera_error, DEBUG_MODE
 
     forked = globals().get("_FORKED_RELOAD", False)
+    camera_error = None
 
     if forked:
         # המודל כבר בRAM — רק מאתחל מצב camera ו-ui
@@ -750,12 +757,31 @@ def main():
     root.mainloop()
 
 def run_camera():
-    global prev_time, camera_ready, settings_open
+    global prev_time, camera_ready, camera_error, settings_open
     set_status("Opening camera...")
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        set_status("ERROR: Camera not found")
+
+    camera_error = None
+    cap = None
+    capture_backends = []
+    if sys.platform == "win32":
+        capture_backends.append(("DirectShow", cv2.CAP_DSHOW))
+        capture_backends.append(("Default", cv2.CAP_ANY))
+    else:
+        capture_backends.append(("Default", cv2.CAP_ANY))
+
+    for backend_name, backend in capture_backends:
+        set_status(f"Opening camera ({backend_name})...")
+        candidate = cv2.VideoCapture(0, backend)
+        if candidate.isOpened():
+            cap = candidate
+            break
+        candidate.release()
+
+    if cap is None:
+        camera_error = "Camera not found or blocked by another app."
+        set_status(f"ERROR: {camera_error}")
         return
+
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     set_status("Camera ready")
@@ -768,6 +794,8 @@ def run_camera():
     while True:
         ret, frame = cap.read()
         if not ret:
+            camera_error = "Camera stopped responding."
+            set_status(f"ERROR: {camera_error}")
             break
 
         frame = cv2.flip(frame, 1)
@@ -832,63 +860,4 @@ def run_camera():
 if __name__ == "__main__":
     import sys as _sys
     FAST_RELOAD = "--fast-reload" in _sys.argv
-
-    if "--build" in _sys.argv:
-        # בנה את עצמך עם --noconsole
-        import subprocess, os, shutil, urllib.request
-        script = os.path.abspath(__file__)
-        src_dir = os.path.dirname(script)
-
-        # הורד את קובץ המודל אם חסר — כדי לכלול אותו ב-EXE
-        model_path = os.path.join(src_dir, "hand_landmarker.task")
-        if not os.path.exists(model_path):
-            print("[BUILD] Downloading model file for bundling...")
-            try:
-                urllib.request.urlretrieve(
-                    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-                    "hand_landmarker/float16/1/hand_landmarker.task",
-                    model_path
-                )
-                print(f"[BUILD] Model saved: {model_path}")
-            except Exception as e:
-                print(f"[BUILD] WARNING: Could not download model: {e}")
-                print("[BUILD] The EXE may not work offline. Run with internet first.")
-
-        pyinstaller = shutil.which("pyinstaller")
-        cmd = [pyinstaller or (_sys.executable + " -m PyInstaller")]
-        if not pyinstaller:
-            cmd = [_sys.executable, "-m", "PyInstaller"]
-        cmd += [
-            "--onefile", "--noconsole", "--clean", "--name", "Handy",
-            "--collect-all", "mediapipe",
-            "--collect-all", "cv2",
-            "--hidden-import", "mediapipe.python.solutions.hands",
-            "--hidden-import", "mediapipe.python.solutions.drawing_utils",
-            "--hidden-import", "mediapipe.tasks",
-            "--hidden-import", "mediapipe.tasks.python",
-            "--hidden-import", "mediapipe.tasks.python.vision",
-            "--hidden-import", "mediapipe.tasks.c",
-            "--hidden-import", "mediapipe.tasks.cc",
-        ]
-        # הוסף קובץ מודל ל-EXE אם קיים (Windows separator = ;)
-        if os.path.exists(model_path):
-            cmd += ["--add-data", f"hand_landmarker.task;."]
-        cmd += [script]
-        print("[BUILD] Running:", " ".join(cmd))
-        subprocess.run(cmd, cwd=src_dir)
-        # העבר את ה-EXE מ-dist לתיקייה הראשית
-        dist_exe = os.path.join(src_dir, "dist", "Handy.exe")
-        final_exe = os.path.join(src_dir, "Handy.exe")
-        if os.path.exists(dist_exe):
-            if os.path.exists(final_exe):
-                os.remove(final_exe)
-            shutil.move(dist_exe, final_exe)
-            print(f"[BUILD] Done: {final_exe}")
-        # נקה
-        for d in ["build", "dist"]:
-            shutil.rmtree(os.path.join(src_dir, d), ignore_errors=True)
-        spec = os.path.join(src_dir, "Handy.spec")
-        if os.path.exists(spec):
-            os.remove(spec)
-    else:
-        main()
+    main()
