@@ -14,7 +14,7 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for package_name in ("mediapipe", "cv2"):
+for package_name in ("mediapipe", "cv2", "customtkinter"):
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(package_name)
     datas += pkg_datas
     binaries += pkg_binaries
@@ -31,6 +31,21 @@ hiddenimports += [
     "mediapipe.tasks.python.vision",
     "mediapipe.tasks.c",
     "mediapipe.tasks.cc",
+    "customtkinter",
+    "pynput",
+    "pynput.mouse",
+    "pynput.keyboard",
+    "handy",
+    "handy.config",
+    "handy.state",
+    "handy.gesture",
+    "handy.drawing",
+    "handy.mouse",
+    "handy.model",
+    "handy.camera",
+    "handy.ui",
+    "handy.ui.loading",
+    "handy.ui.settings",
 ]
 hiddenimports = list(dict.fromkeys(hiddenimports))
 

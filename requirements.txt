@@ -1,0 +1,5 @@
+opencv-python>=4.8
+mediapipe>=0.10
+numpy>=1.24
+pynput>=1.7
+customtkinter>=5.2

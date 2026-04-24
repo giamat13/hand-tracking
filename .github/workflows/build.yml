@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: Handy.exe
+          - os: ubuntu-latest
+            artifact_name: Handy
+          - os: macos-latest
+            artifact_name: Handy
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            python3-tk \
+            libxcb-cursor0 \
+            libgl1 \
+            libglib2.0-0 \
+            libsm6 \
+            libxrender1 \
+            libxext6
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt nuitka zstandard
+
+      - name: Build with Nuitka
+        run: python build_nuitka.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Handy-${{ runner.os }}
+          path: release/${{ matrix.artifact_name }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename artifacts
+        run: |
+          mv artifacts/Handy-Windows/Handy.exe artifacts/Handy-Windows.exe
+          mv artifacts/Handy-Linux/Handy     artifacts/Handy-Linux
+          mv artifacts/Handy-macOS/Handy     artifacts/Handy-macOS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/Handy-Windows.exe
+            artifacts/Handy-Linux
+            artifacts/Handy-macOS
