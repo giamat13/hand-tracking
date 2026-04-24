@@ -8,8 +8,15 @@ Handy - Hand Detection & Gesture Tracking
 import subprocess, sys
 
 def install_deps():
+    # דלג על התקנה אם רצים כ-EXE (PyInstaller)
+    if getattr(sys, 'frozen', False):
+        return
     pkgs = ["opencv-python", "mediapipe", "numpy", "pyautogui"]
-    for pkg in pkgs:9
+    for pkg in pkgs:
+        try:
+            __import__(pkg.replace("-", "_").split("-")[0])
+        except ImportError:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
 install_deps()
 
 # הסתר חלון CMD על Windows (רלוונטי כשרצים כ-.py, לא כ-EXE עם --noconsole)
@@ -144,6 +151,7 @@ CONTROL_HAND    = "Right" # איזו יד שולטת - Right/Left/Both
 CLICK_COOLDOWN  = 0.6    # שניות בין קליקים
 SHOW_TRAIL      = True   # הצג שובל
 SHOW_COORDS     = True   # הצג קואורדינטות
+screen_hidden   = False  # האם החלון מוסתר (ממשיך לרוץ ברקע)
 
 HAND_CONNECTIONS = [
     (0,1),(1,2),(2,3),(3,4),
@@ -228,7 +236,8 @@ def load_model():
         # שמירה תמיד ליד ה-EXE / הסקריפט, תואם גם PyInstaller
         import sys as _sys
         if getattr(_sys, 'frozen', False):
-            _app_dir = os.path.dirname(_sys.executable)
+            # PyInstaller onefile מחלץ קבצים ל-sys._MEIPASS
+            _app_dir = getattr(_sys, '_MEIPASS', os.path.dirname(_sys.executable))
         else:
             _app_dir = os.path.dirname(os.path.abspath(__file__))
         MODEL_PATH = os.path.join(_app_dir, "hand_landmarker.task")
@@ -291,8 +300,8 @@ def load_model():
         except Exception as e:
             model_error = str(e)
             set_status(f"ERROR: {e}")
-            return
 
+    # חובה לסמן שהטעינה הסתיימה, גם אם נכשלה, כדי לא לתקוע את הלולאה לנצח
     model_ready = True
 
 # ── ג'סטות ─────────────────────────────────────────────────────────
@@ -359,7 +368,7 @@ def draw_info_box(frame, label, wx, wy, color):
 def draw_ui(frame, fps, hand_count):
     h, w = frame.shape[:2]
     cv2.rectangle(frame, (0,0), (w,50), (10,10,10), -1)
-    hint = "ESC=quit  S=screenshot  G=settings" + ("  R=reload" if DEBUG_MODE else "")
+    hint = "ESC=quit  S=screenshot  G=settings  H=hide" + ("  R=reload" if DEBUG_MODE else "")
     cv2.putText(frame, f"HANDY  |  {hint}",
                 (12,32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_TEXT, 1, cv2.LINE_AA)
     cv2.putText(frame, f"FPS: {fps:.0f}", (w-120,32),
@@ -741,7 +750,7 @@ def main():
     root.mainloop()
 
 def run_camera():
-    global prev_time, camera_ready, settings_open
+    global prev_time, camera_ready, settings_open, screen_hidden
     set_status("Opening camera...")
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -779,18 +788,47 @@ def run_camera():
             hand_count = 0
         else:
             if model_error:
-                print(f"ERROR: {model_error}")
-                break
-            hand_count = process_frame(frame, h, w)
-            draw_ui(frame, fps_avg, hand_count)
+                # הצג שגיאה ויזואלית כי ב-EXE עם --noconsole אין קונסולה
+                cv2.putText(frame, "MODEL ERROR:", (20, h//2 - 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2, cv2.LINE_AA)
+                # חתוך טקסט ארוך לשורות
+                err = str(model_error)
+                y_pos = h//2
+                for i in range(0, len(err), 50):
+                    cv2.putText(frame, err[i:i+50], (20, y_pos),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 255), 1, cv2.LINE_AA)
+                    y_pos += 30
+                cv2.putText(frame, "ESC to exit", (20, y_pos + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            else:
+                hand_count = process_frame(frame, h, w)
+                draw_ui(frame, fps_avg, hand_count)
 
-        cv2.imshow("Handy", frame)
+        # אם המסך מוסתר — לא מציגים חלון, רק מעבדים
+        if not screen_hidden:
+            cv2.imshow("Handy", frame)
+        else:
+            # וודא שהחלון סגור
+            try:
+                cv2.destroyWindow("Handy")
+            except Exception:
+                pass
 
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:
+        if key == 27:  # ESC — יציאה מלאה
             break
-        elif cv2.getWindowProperty("Handy", cv2.WND_PROP_VISIBLE) < 1:
-            break
+        elif key in (ord('h'), ord('H')):
+            # סגור את המסך אבל המשך לרוץ ברקע
+            screen_hidden = True
+            try:
+                cv2.destroyWindow("Handy")
+            except Exception:
+                pass
+            print("[HANDY] Window hidden — control still active. Relaunch EXE to show again.")
+        elif not screen_hidden and cv2.getWindowProperty("Handy", cv2.WND_PROP_VISIBLE) < 1:
+            # המשתמש סגר את החלון ידנית — גם זה נחשב כהסתרה (המשך לרוץ)
+            screen_hidden = True
+            print("[HANDY] Window closed — control still active. Relaunch EXE to show again.")
         elif key in (ord('g'), ord('G')):
             if not settings_open:
                 settings_open = True
@@ -815,9 +853,25 @@ if __name__ == "__main__":
 
     if "--build" in _sys.argv:
         # בנה את עצמך עם --noconsole
-        import subprocess, os, shutil
+        import subprocess, os, shutil, urllib.request
         script = os.path.abspath(__file__)
         src_dir = os.path.dirname(script)
+
+        # הורד את קובץ המודל אם חסר — כדי לכלול אותו ב-EXE
+        model_path = os.path.join(src_dir, "hand_landmarker.task")
+        if not os.path.exists(model_path):
+            print("[BUILD] Downloading model file for bundling...")
+            try:
+                urllib.request.urlretrieve(
+                    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+                    "hand_landmarker/float16/1/hand_landmarker.task",
+                    model_path
+                )
+                print(f"[BUILD] Model saved: {model_path}")
+            except Exception as e:
+                print(f"[BUILD] WARNING: Could not download model: {e}")
+                print("[BUILD] The EXE may not work offline. Run with internet first.")
+
         pyinstaller = shutil.which("pyinstaller")
         cmd = [pyinstaller or (_sys.executable + " -m PyInstaller")]
         if not pyinstaller:
@@ -833,8 +887,11 @@ if __name__ == "__main__":
             "--hidden-import", "mediapipe.tasks.python.vision",
             "--hidden-import", "mediapipe.tasks.c",
             "--hidden-import", "mediapipe.tasks.cc",
-            script
         ]
+        # הוסף קובץ מודל ל-EXE אם קיים (Windows separator = ;)
+        if os.path.exists(model_path):
+            cmd += ["--add-data", f"hand_landmarker.task;."]
+        cmd += [script]
         print("[BUILD] Running:", " ".join(cmd))
         subprocess.run(cmd, cwd=src_dir)
         # העבר את ה-EXE מ-dist לתיקייה הראשית
