@@ -4,3 +4,5 @@ hand_landmarker.task
 TODO.md
 *.png
 *.exe
+build/
+dist/

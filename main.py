@@ -225,19 +225,29 @@ def load_model():
         from mediapipe.tasks.python.vision import HandLandmarkerOptions, HandLandmarker
         import urllib.request, os
 
-        # שמירה תמיד ליד קובץ הסקריפט, לא תלוי ב-cwd
-        MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
+        # שמירה תמיד ליד ה-EXE / הסקריפט, תואם גם PyInstaller
+        import sys as _sys
+        if getattr(_sys, 'frozen', False):
+            _app_dir = os.path.dirname(_sys.executable)
+        else:
+            _app_dir = os.path.dirname(os.path.abspath(__file__))
+        MODEL_PATH = os.path.join(_app_dir, "hand_landmarker.task")
         if not os.path.exists(MODEL_PATH):
             if FAST_RELOAD:
                 set_status("ERROR: model file missing, run normally first")
                 model_error = "hand_landmarker.task not found"
                 return
             set_status("Downloading hand model (~9MB)...")
-            urllib.request.urlretrieve(
-                "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
-                "hand_landmarker/float16/1/hand_landmarker.task",
-                MODEL_PATH
-            )
+            try:
+                urllib.request.urlretrieve(
+                    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+                    "hand_landmarker/float16/1/hand_landmarker.task",
+                    MODEL_PATH
+                )
+            except Exception as _dl_err:
+                model_error = f"Download failed: {_dl_err}"
+                set_status(f"ERROR: {_dl_err}")
+                return
         set_status("Loading hand model..." if not FAST_RELOAD else "Building model from cache...")
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         options = HandLandmarkerOptions(
@@ -257,13 +267,18 @@ def load_model():
             set_status("Trying legacy mediapipe API...")
             import mediapipe as _mp
             # תמיכה בגרסאות ישנות וחדשות כאחד
-            if hasattr(_mp, 'solutions'):
+            if hasattr(_mp, 'solutions') and hasattr(_mp.solutions, 'hands'):
                 mp_hands = _mp.solutions.hands
                 mp_draw  = _mp.solutions.drawing_utils
             else:
-                # גרסאות חדשות — ייבוא ישיר
-                from mediapipe.python.solutions import hands as _hands_mod
-                from mediapipe.python.solutions import drawing_utils as _draw_mod
+                # ניסיון ייבוא ישיר
+                try:
+                    from mediapipe.python.solutions import hands as _hands_mod
+                    from mediapipe.python.solutions import drawing_utils as _draw_mod
+                except ImportError:
+                    # fallback נוסף — גרסאות מסוימות
+                    import mediapipe.python.solutions.hands as _hands_mod
+                    import mediapipe.python.solutions.drawing_utils as _draw_mod
                 mp_hands = _hands_mod
                 mp_draw  = _draw_mod
             hands_old = mp_hands.Hands(
@@ -807,7 +822,19 @@ if __name__ == "__main__":
         cmd = [pyinstaller or (_sys.executable + " -m PyInstaller")]
         if not pyinstaller:
             cmd = [_sys.executable, "-m", "PyInstaller"]
-        cmd += ["--onefile", "--noconsole", "--clean", "--name", "Handy", script]
+        cmd += [
+            "--onefile", "--noconsole", "--clean", "--name", "Handy",
+            "--collect-all", "mediapipe",
+            "--collect-all", "cv2",
+            "--hidden-import", "mediapipe.python.solutions.hands",
+            "--hidden-import", "mediapipe.python.solutions.drawing_utils",
+            "--hidden-import", "mediapipe.tasks",
+            "--hidden-import", "mediapipe.tasks.python",
+            "--hidden-import", "mediapipe.tasks.python.vision",
+            "--hidden-import", "mediapipe.tasks.c",
+            "--hidden-import", "mediapipe.tasks.cc",
+            script
+        ]
         print("[BUILD] Running:", " ".join(cmd))
         subprocess.run(cmd, cwd=src_dir)
         # העבר את ה-EXE מ-dist לתיקייה הראשית
