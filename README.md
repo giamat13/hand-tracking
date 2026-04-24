@@ -51,10 +51,12 @@ Adjustable settings (via settings window or directly in `main.py`):
 |---|---|---|
 | `SMOOTH` | 7 | Cursor smoothing (0=slow, 100=fast) |
 | `SPEED` | 5 | Mouse speed multiplier |
+| `DYNAMIC_SPEED` | True | Slow hand = very slow cursor, fast hand = normal speed |
+| `SPEED_CURVE` | 2.0 | Power curve exponent — higher = more contrast between slow/fast |
 | `CAM_MARGIN` | 0.15 | Camera edge margin for full-screen mapping |
 | `DEADZONE` | 8 | Minimum pixel movement threshold |
 | `CONTROL_HAND` | Right | Which hand controls the mouse (Right/Left/Both) |
-| `CLICK_COOLDOWN` | 0.6s | Minimum time between clicks |
+| `CLICK_COOLDOWN` | 0.6s | Minimum time between clicks |}
 
 ## Notes
 

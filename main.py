@@ -9,13 +9,7 @@ import subprocess, sys
 
 def install_deps():
     pkgs = ["opencv-python", "mediapipe", "numpy", "pyautogui"]
-    for pkg in pkgs:
-        try:
-            __import__(pkg.replace("-", "_").split("_python")[0])
-        except ImportError:
-            print(f"Installing {pkg}...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"])
-
+    for pkg in pkgs:9
 install_deps()
 
 import cv2
@@ -23,7 +17,7 @@ import numpy as np
 import time
 import threading
 import math
-from collections import deque
+from collections import deque  
 import mediapipe as mp
 import tkinter as tk
 import pyautogui
@@ -43,6 +37,76 @@ mp_draw       = None
 model_ready   = False   # True כשהמודל מוכן
 model_error   = None    # שגיאה אם נכשל
 camera_ready  = False   # True כשהמצלמה נפתחה
+
+# ── debug / hot-reload ──────────────────────────────────────────────
+DEBUG_MODE   = False   # מופעל מהגדרות
+FAST_RELOAD  = False   # מוגדר ל-True כשמופעל עם --fast-reload
+
+def _do_hot_reload():
+    """
+    Hot reload שמשמר את המודל בRAM:
+    - Mac/Linux: os.fork() — הבן יורש את כל הזיכרון כולל המודל,
+      קורא את הקוד החדש ומריץ אותו. האב מת.
+    - Windows: fallback — subprocess חדש טוען מהדיסק (מהיר, ללא הורדה).
+    """
+    import sys, os
+
+    print("[HOT-RELOAD] reloading...")
+
+    if sys.platform != "win32":
+        # ── fork: הבן יורש RAM + מודל ──────────────────────────────
+        pid = os.fork()
+        if pid == 0:
+            # אנחנו הבן — שמור מצב המודל לפני שה-exec יאפס גלובלים
+            _saved_detector    = detector
+            _saved_hands_old   = hands_old
+            _saved_mp_hands    = mp_hands
+            _saved_mp_draw     = mp_draw
+            _saved_use_new_api = USE_NEW_API
+            _saved_model_ready = model_ready
+            _saved_model_error = model_error
+
+            try:
+                with open(os.path.abspath(__file__), "r", encoding="utf-8") as f:
+                    src = f.read()
+                # דלג על guard ועל install (כבר מותקן)
+                src = src.replace('if __name__ == "__main__":', 'if False:')
+                src = src.replace('install_deps()', '')
+                g = sys.modules["__main__"].__dict__
+                exec(compile(src, __file__, "exec"), g)
+
+                # שחזר מצב המודל אחרי ה-exec
+                g["detector"]      = _saved_detector
+                g["hands_old"]     = _saved_hands_old
+                g["mp_hands"]      = _saved_mp_hands
+                g["mp_draw"]       = _saved_mp_draw
+                g["USE_NEW_API"]   = _saved_use_new_api
+                g["model_ready"]   = _saved_model_ready
+                g["model_error"]   = _saved_model_error
+                g["_FORKED_RELOAD"] = True
+                g["DEBUG_MODE"]    = True
+
+                # הפעל מחדש
+                g["main"]()
+            except Exception as e:
+                print(f"[HOT-RELOAD] child error: {e}")
+            finally:
+                os._exit(0)
+        else:
+            # אנחנו האב — מת
+            import time
+            time.sleep(0.2)
+            os._exit(0)
+    else:
+        # ── Windows fallback: subprocess ────────────────────────────
+        import subprocess, time
+        script = os.path.abspath(__file__)
+        subprocess.Popen(
+            [sys.executable, script, "--fast-reload"],
+            creationflags=subprocess.CREATE_NEW_CONSOLE
+        )
+        time.sleep(0.3)
+        os._exit(0)
 
 # ── קבועים ─────────────────────────────────────────────────────────
 FINGER_TIPS  = [4, 8, 12, 16, 20]
@@ -65,6 +129,8 @@ smooth_dy   = 0.0
 # ── הגדרות (ניתן לשנות דרך חלון ההגדרות) ──────────────────────────
 SMOOTH          = 7      # 0=עצלן 100=מהיר (100 = 0.07 הישן)
 SPEED           = 5      # מכפיל מהירות עכבר
+DYNAMIC_SPEED   = True   # מהירות דינמית: איטי=מאוד איטי, מהיר=רגיל
+SPEED_CURVE     = 2.0    # חזקה: 1=לינארי, 2=ריבועי, 3=קובי
 CAM_MARGIN      = 0.15   # חתך משולי המצלמה למיפוי מלא למסך
 DEADZONE        = 8      # פיקסלים - מתחת לזה לא זז
 MOUSE_ENABLED   = False  # האם לשלוט בעכבר
@@ -129,7 +195,6 @@ def show_loading_window(root, check_queue):
         if (model_ready or model_error) and camera_ready:
             root.overrideredirect(False)
             root.withdraw()
-            check_queue()
             return
         angle_offset[0] = (angle_offset[0] + 6) % 360
         for i, arc in enumerate(arcs):
@@ -149,20 +214,25 @@ def show_loading_window(root, check_queue):
 def load_model():
     global detector, hands_old, mp_hands, mp_draw, USE_NEW_API, model_ready, model_error
     try:
-        set_status("Importing mediapipe...")
+        set_status("Importing mediapipe..." if not FAST_RELOAD else "Fast reload — loading model...")
         from mediapipe.tasks import python as mp_python
         from mediapipe.tasks.python.vision import HandLandmarkerOptions, HandLandmarker
         import urllib.request, os
 
-        MODEL_PATH = "hand_landmarker.task"
+        # שמירה תמיד ליד קובץ הסקריפט, לא תלוי ב-cwd
+        MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
         if not os.path.exists(MODEL_PATH):
+            if FAST_RELOAD:
+                set_status("ERROR: model file missing, run normally first")
+                model_error = "hand_landmarker.task not found"
+                return
             set_status("Downloading hand model (~9MB)...")
             urllib.request.urlretrieve(
                 "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
                 "hand_landmarker/float16/1/hand_landmarker.task",
                 MODEL_PATH
             )
-        set_status("Loading hand model...")
+        set_status("Loading hand model..." if not FAST_RELOAD else "Building model from cache...")
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
         options = HandLandmarkerOptions(
             base_options=base_options,
@@ -258,7 +328,8 @@ def draw_info_box(frame, label, wx, wy, color):
 def draw_ui(frame, fps, hand_count):
     h, w = frame.shape[:2]
     cv2.rectangle(frame, (0,0), (w,50), (10,10,10), -1)
-    cv2.putText(frame, "HANDY  |  ESC = quit  |  S = screenshot  |  G = settings",
+    hint = "ESC=quit  S=screenshot  G=settings" + ("  R=reload" if DEBUG_MODE else "")
+    cv2.putText(frame, f"HANDY  |  {hint}",
                 (12,32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_TEXT, 1, cv2.LINE_AA)
     cv2.putText(frame, f"FPS: {fps:.0f}", (w-120,32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.65, COLOR_TRAIL, 2, cv2.LINE_AA)
@@ -267,6 +338,9 @@ def draw_ui(frame, fps, hand_count):
     mouse_status = f"Mouse: {'ON' if MOUSE_ENABLED else 'OFF'}  Hand: {CONTROL_HAND}"
     cv2.putText(frame, mouse_status, (12, h-12),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_TRAIL if MOUSE_ENABLED else (100,100,100), 1, cv2.LINE_AA)
+    if DEBUG_MODE:
+        cv2.putText(frame, "DEBUG", (w-68, h-12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 80, 255), 2, cv2.LINE_AA)
 
 def draw_loading(frame, dots):
     """מסך המתנה בזמן טעינת המודל"""
@@ -319,21 +393,51 @@ def open_settings():
     settings_open = True
     ui_queue.put("open_settings")
 
-def _show_settings_window():
-    global SMOOTH, SPEED, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open
-    root = tk.Toplevel()
-    root.title("Handy - Settings")
-    root.configure(bg="#0f0f0f")
-    root.resizable(False, False)
-    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-    w, h = 440, 560
-    root.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+def _show_settings_window(root):
+    global SMOOTH, SPEED, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, DYNAMIC_SPEED, SPEED_CURVE, settings_open, DEBUG_MODE
+    win = tk.Toplevel(root)
+    win.title("Handy - Settings")
+    win.configure(bg="#0f0f0f")
+    win.resizable(False, True)
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    win_h = min(600, sh - 80)
+    w = 460
+    win.geometry(f"{w}x{win_h}+{(sw-w)//2}+{(sh-win_h)//2}")
+    win.minsize(w, 300)
 
     BG, FG, ACC, DIM = "#0f0f0f", "#eeeeee", "#00ff96", "#555555"
-    tk.Label(root, text="HANDY  SETTINGS", bg=BG, fg=ACC,
+
+    # ── גלילה ──────────────────────────────────────────────────────
+    outer = tk.Frame(win, bg=BG)
+    outer.pack(fill="both", expand=True)
+
+    canvas_scroll = tk.Canvas(outer, bg=BG, highlightthickness=0)
+    scrollbar = tk.Scrollbar(outer, orient="vertical", command=canvas_scroll.yview)
+    canvas_scroll.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side="right", fill="y")
+    canvas_scroll.pack(side="left", fill="both", expand=True)
+
+    inner = tk.Frame(canvas_scroll, bg=BG)
+    inner_win = canvas_scroll.create_window((0, 0), window=inner, anchor="nw")
+
+    def _on_resize(e):
+        canvas_scroll.itemconfig(inner_win, width=e.width)
+    canvas_scroll.bind("<Configure>", _on_resize)
+
+    def _on_frame_configure(e):
+        canvas_scroll.configure(scrollregion=canvas_scroll.bbox("all"))
+    inner.bind("<Configure>", _on_frame_configure)
+
+    def _on_mousewheel(e):
+        canvas_scroll.yview_scroll(int(-1 * (e.delta / 120)), "units")
+    win.bind("<MouseWheel>", _on_mousewheel)
+    win.bind("<Button-4>", lambda e: canvas_scroll.yview_scroll(-1, "units"))
+    win.bind("<Button-5>", lambda e: canvas_scroll.yview_scroll(1, "units"))
+
+    tk.Label(inner, text="HANDY  SETTINGS", bg=BG, fg=ACC,
              font=("Consolas", 14, "bold")).pack(pady=(18,12))
 
-    frame = tk.Frame(root, bg=BG)
+    frame = tk.Frame(inner, bg=BG)
     frame.pack(fill="x", padx=30)
 
     def row(label, widget_fn, row_i):
@@ -370,15 +474,19 @@ def _show_settings_window():
     dead_var     = tk.IntVar(value=DEADZONE)
     cooldown_var = tk.DoubleVar(value=CLICK_COOLDOWN)
     hand_var     = tk.StringVar(value=CONTROL_HAND)
+    dyn_var      = tk.BooleanVar(value=DYNAMIC_SPEED)
+    curve_var    = tk.DoubleVar(value=SPEED_CURVE)
 
     s_smooth   = row("Smoothing (1-100)", lambda f: tk.Scale(f, from_=1, to=100, variable=smooth_var,   **slider_style), 5)
     s_speed    = row("Speed (1-10)",      lambda f: tk.Scale(f, from_=1, to=10,  variable=speed_var,    **slider_style), 6)
-    s_dead     = row("Deadzone (px)",     lambda f: tk.Scale(f, from_=0, to=40,  variable=dead_var,     **slider_style), 7)
-    s_cooldown = row("Click cooldown (s)",lambda f: tk.Scale(f, from_=0.1, to=2.0, resolution=0.1, variable=cooldown_var, **slider_style), 8)
+    row("Dynamic speed",    lambda f: tk.Checkbutton(f, variable=dyn_var, bg=BG, fg=FG, selectcolor="#333", activebackground=BG, font=("Consolas",10)), 7)
+    s_curve    = row("Speed curve (1-4)", lambda f: tk.Scale(f, from_=1.0, to=4.0, resolution=0.1, variable=curve_var, **slider_style), 8)
+    s_dead     = row("Deadzone (px)",     lambda f: tk.Scale(f, from_=0, to=40,  variable=dead_var,     **slider_style), 9)
+    s_cooldown = row("Click cooldown (s)",lambda f: tk.Scale(f, from_=0.1, to=2.0, resolution=0.1, variable=cooldown_var, **slider_style), 10)
 
-    tk.Label(frame, text="Control hand", bg=BG, fg=FG, font=("Consolas",10), anchor="w", width=22).grid(row=9, column=0, pady=4, sticky="w")
+    tk.Label(frame, text="Control hand", bg=BG, fg=FG, font=("Consolas",10), anchor="w", width=22).grid(row=11, column=0, pady=4, sticky="w")
     hf = tk.Frame(frame, bg=BG)
-    hf.grid(row=9, column=1, sticky="w")
+    hf.grid(row=11, column=1, sticky="w")
     radio_btns = []
     for val in ("Right", "Left", "Both"):
         rb = tk.Radiobutton(hf, text=val, variable=hand_var, value=val, bg=BG, fg=FG,
@@ -386,7 +494,7 @@ def _show_settings_window():
         rb.pack(side="left")
         radio_btns.append(rb)
 
-    mouse_widgets = [s_smooth, s_speed, s_dead, s_cooldown] + radio_btns
+    mouse_widgets = [s_smooth, s_speed, s_dead, s_cooldown, s_curve] + radio_btns
 
     def update_mouse_widgets(*_):
         enabled = mouse_var.get()
@@ -396,22 +504,37 @@ def _show_settings_window():
     mouse_var.trace_add("write", update_mouse_widgets)
     update_mouse_widgets()
 
+    # ── Debug Mode ─────────────────────────────────────────────────
+    tk.Frame(frame, bg="#333", height=1).grid(row=12, column=0, columnspan=2, sticky="ew", pady=8)
+    debug_lbl = tk.Label(frame, text="▼  Developer", bg=BG, fg=ACC, font=("Consolas", 10, "bold"), anchor="w")
+    debug_lbl.grid(row=13, column=0, columnspan=2, sticky="w", pady=(2,4))
+
+    debug_var = tk.BooleanVar(value=DEBUG_MODE)
+    debug_frame = tk.Frame(frame, bg=BG)
+    debug_frame.grid(row=14, column=0, columnspan=2, sticky="w")
+    tk.Checkbutton(debug_frame, text="Debug Mode  (R = hot reload — reloads code, keeps model)",
+                   variable=debug_var, bg=BG, fg=FG,
+                   selectcolor="#333", activebackground=BG,
+                   font=("Consolas", 9), wraplength=340, justify="left").pack(anchor="w")
+
     def apply():
-        global SMOOTH, SPEED, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open
+        global SMOOTH, SPEED, DEADZONE, MOUSE_ENABLED, CONTROL_HAND, CLICK_COOLDOWN, SHOW_TRAIL, SHOW_COORDS, settings_open, DEBUG_MODE
         SMOOTH, SPEED, DEADZONE = int(smooth_var.get()), speed_var.get(), dead_var.get()
         CLICK_COOLDOWN, MOUSE_ENABLED = cooldown_var.get(), mouse_var.get()
         SHOW_TRAIL, SHOW_COORDS, CONTROL_HAND = trail_var.get(), coords_var.get(), hand_var.get()
+        DYNAMIC_SPEED, SPEED_CURVE = dyn_var.get(), curve_var.get()
+        DEBUG_MODE = debug_var.get()
         settings_open = False
-        root.destroy()
+        win.destroy()
 
     def on_close():
         global settings_open
         settings_open = False
-        root.destroy()
+        win.destroy()
 
-    tk.Button(root, text="Apply", command=apply, bg=ACC, fg="#000",
+    tk.Button(inner, text="Apply", command=apply, bg=ACC, fg="#000",
               font=("Consolas", 11, "bold"), relief="flat", padx=20, pady=6).pack(pady=16)
-    root.protocol("WM_DELETE_WINDOW", on_close)
+    win.protocol("WM_DELETE_WINDOW", on_close)
 
 def move_mouse(lm_list, gesture):
     global smooth_x, smooth_y, last_click, prev_hand_x, prev_hand_y, smooth_dx, smooth_dy
@@ -419,25 +542,47 @@ def move_mouse(lm_list, gesture):
         return
     tx, ty = lm_list[8][0], lm_list[8][1]
     if gesture == "Fist":
+        # כשאגרוף - עצור ואפס delta כדי שלא יצטבר
         prev_hand_x, prev_hand_y = tx, ty
-        return
-    if prev_hand_x is None:
-        prev_hand_x, prev_hand_y = tx, ty
-        cx, cy = pyautogui.position()
-        smooth_x, smooth_y = cx, cy
-        return
-    dx_raw = (tx - prev_hand_x) * SCREEN_W * SPEED * 0.5
-    dy_raw = (ty - prev_hand_y) * SCREEN_H * SPEED * 0.5
-    prev_hand_x, prev_hand_y = tx, ty
-    s = SMOOTH / 100
-    smooth_dx = smooth_dx + s * (dx_raw - smooth_dx)
-    smooth_dy = smooth_dy + s * (dy_raw - smooth_dy)
-    if abs(smooth_dx) < DEADZONE and abs(smooth_dy) < DEADZONE:
         smooth_dx, smooth_dy = 0.0, 0.0
         return
-    smooth_x = max(0, min(SCREEN_W - 1, int(smooth_x + smooth_dx)))
-    smooth_y = max(0, min(SCREEN_H - 1, int(smooth_y + smooth_dy)))
-    pyautogui.moveTo(smooth_x, smooth_y)
+    if prev_hand_x is None:
+        # יד הופיעה לראשונה - עגן למיקום נוכחי של העכבר ואפס delta
+        prev_hand_x, prev_hand_y = tx, ty
+        cx, cy = pyautogui.position()
+        smooth_x, smooth_y = float(cx), float(cy)
+        smooth_dx, smooth_dy = 0.0, 0.0
+        return
+    dx_raw = (tx - prev_hand_x) * SCREEN_W
+    dy_raw = (ty - prev_hand_y) * SCREEN_H
+    # מגן מפני קפיצות גדולות (יד נעלמה וחזרה) - אפס delta במקום לצבור
+    if abs(dx_raw) > SCREEN_W * 0.15 or abs(dy_raw) > SCREEN_H * 0.15:
+        prev_hand_x, prev_hand_y = tx, ty
+        smooth_dx, smooth_dy = 0.0, 0.0
+        return
+    if DYNAMIC_SPEED:
+        dist = (dx_raw**2 + dy_raw**2) ** 0.5
+        if dist < DEADZONE:
+            prev_hand_x, prev_hand_y = tx, ty
+            return
+        norm = dist / (SCREEN_W * 0.1)
+        scale = min((norm ** SPEED_CURVE), 1.0) * SPEED * 0.8
+        dx_raw *= scale
+        dy_raw *= scale
+    else:
+        if (dx_raw**2 + dy_raw**2) ** 0.5 < DEADZONE:
+            prev_hand_x, prev_hand_y = tx, ty
+            return
+        dx_raw *= SPEED * 0.5
+        dy_raw *= SPEED * 0.5
+    prev_hand_x, prev_hand_y = tx, ty
+    # SMOOTH=0 → עצלן (s=0.05), SMOOTH=100 → מיידי (s=1.0)
+    s = 0.05 + (SMOOTH / 100) * 0.95
+    smooth_dx = smooth_dx * (1 - s) + dx_raw * s
+    smooth_dy = smooth_dy * (1 - s) + dy_raw * s
+    smooth_x = max(0, min(SCREEN_W - 1, smooth_x + smooth_dx))
+    smooth_y = max(0, min(SCREEN_H - 1, smooth_y + smooth_dy))
+    pyautogui.moveTo(int(smooth_x), int(smooth_y))
     if gesture == "4 Fingers" and time.time() - last_click > CLICK_COOLDOWN:
         pyautogui.click()
         last_click = time.time()
@@ -485,6 +630,14 @@ def draw_hand(frame, idx, lm_list, label, h, w, use_mp_draw=False, hand_lm_raw=N
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200,255,200), 1, cv2.LINE_AA)
 
 # ── עיבוד פריים ────────────────────────────────────────────────────
+def _reset_mouse_anchor():
+    """כשאין ידיים - אפס את נקודת העיגון כדי שבחזרה לא יהיה drift"""
+    global prev_hand_x, prev_hand_y, smooth_dx, smooth_dy
+    prev_hand_x = None
+    prev_hand_y = None
+    smooth_dx   = 0.0
+    smooth_dy   = 0.0
+
 def process_frame(frame, h, w):
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)    
 
@@ -494,6 +647,7 @@ def process_frame(frame, h, w):
         result    = detector.detect_for_video(mp_image, timestamp)
         if not result.hand_landmarks:
             trails.clear()
+            _reset_mouse_anchor()
             return 0
         for idx, (hand_lms, hand_info) in enumerate(
                 zip(result.hand_landmarks, result.handedness)):
@@ -507,6 +661,7 @@ def process_frame(frame, h, w):
         results = hands_old.process(rgb)
         if not results.multi_hand_landmarks:
             trails.clear()
+            _reset_mouse_anchor()
             return 0
         for idx, (hand_lm, hand_info) in enumerate(
                 zip(results.multi_hand_landmarks, results.multi_handedness)):
@@ -518,29 +673,44 @@ def process_frame(frame, h, w):
         return len(results.multi_hand_landmarks)
 
 # ── לולאה ראשית ─────────────────────────────────────────────────────
-def main():
-    global prev_time, camera_ready
+_FORKED_RELOAD = False  # מוגדר True אחרי fork
 
-    threading.Thread(target=load_model, daemon=True).start()
+def main():
+    global prev_time, camera_ready, DEBUG_MODE
+
+    forked = globals().get("_FORKED_RELOAD", False)
+
+    if forked:
+        # המודל כבר בRAM — רק מאתחל מצב camera ו-ui
+        camera_ready = False
+        print("[HOT-RELOAD] model preserved in RAM, restarting camera+ui...")
+    else:
+        threading.Thread(target=load_model, daemon=True).start()
+
     threading.Thread(target=run_camera, daemon=True).start()
 
     root = tk.Tk()
+
+    # אם זה fast-reload — הפעל debug mode אוטומטית
+    if FAST_RELOAD or forked:
+        DEBUG_MODE = True
 
     def check_queue():
         try:
             while True:
                 msg = ui_queue.get_nowait()
                 if msg == "open_settings":
-                    _show_settings_window()
+                    _show_settings_window(root)
         except queue.Empty:
             pass
         root.after(100, check_queue)
 
+    root.after(100, check_queue)
     show_loading_window(root, check_queue)
     root.mainloop()
 
 def run_camera():
-    global prev_time, camera_ready
+    global prev_time, camera_ready, settings_open
     set_status("Opening camera...")
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -591,7 +761,12 @@ def run_camera():
         elif cv2.getWindowProperty("Handy", cv2.WND_PROP_VISIBLE) < 1:
             break
         elif key in (ord('g'), ord('G')):
-            threading.Thread(target=open_settings, daemon=True).start()
+            if not settings_open:
+                settings_open = True
+                ui_queue.put("open_settings")
+        elif key in (ord('r'), ord('R')):
+            if DEBUG_MODE:
+                _do_hot_reload()
         elif key in (ord('s'), ord('S')):
             fname = f"screenshot_{screenshot_cnt:03d}.png"
             cv2.imwrite(fname, frame)
@@ -604,4 +779,6 @@ def run_camera():
     os.kill(os.getpid(), 9)
 
 if __name__ == "__main__":
+    import sys as _sys
+    FAST_RELOAD = "--fast-reload" in _sys.argv
     main()
