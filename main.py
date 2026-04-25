@@ -15,6 +15,7 @@ import handy.state as state
 from handy.camera import run_camera
 from handy.model import load_model
 from handy.mouse import init_screen_size
+from handy.settings_io import load as load_settings
 from handy.ui.loading import show_loading_window
 from handy.ui.settings import show_settings_window
 
@@ -41,6 +42,8 @@ def main() -> None:
 
     if state.FAST_RELOAD:
         state.DEBUG_MODE = True
+
+    load_settings()
 
     init_screen_size()
 

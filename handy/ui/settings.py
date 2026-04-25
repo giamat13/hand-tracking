@@ -8,6 +8,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 import handy.state as state
+from handy.settings_io import save as save_settings
 
 _BG = "#0f0f0f"
 _ACC = "#00ff96"
@@ -207,6 +208,7 @@ def _build(root: ctk.CTk) -> None:
         state.SPEED_CURVE    = round(curve_var.get(), 1)
         state.DEBUG_MODE     = debug_var.get()
         state.settings_open  = False
+        save_settings()
         print("[SETTINGS] apply")
         win.destroy()
 

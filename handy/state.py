@@ -26,6 +26,9 @@ model_error = None
 camera_ready: bool = False
 camera_error = None
 
+# ── Build mode ────────────────────────────────────────────────────
+IS_INSTALLED: bool = False  # set to True by installer build via env var
+
 # ── Debug / hot-reload ─────────────────────────────────────────────
 DEBUG_MODE: bool = False
 FAST_RELOAD: bool = False

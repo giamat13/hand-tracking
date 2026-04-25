@@ -1,9 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import mediapipe
+import tempfile
 
 # Bundle the entire mediapipe package (includes .pyd/.so and data files)
 mediapipe_path = os.path.dirname(mediapipe.__file__)
+
+build_target = os.environ.get("HANDY_BUILD_TARGET", "portable")
+
+# Write a runtime hook that bakes IS_INSTALLED into the frozen app
+_hook_content = f"import handy.state as state; state.IS_INSTALLED = {str(build_target == 'installer')}\n"
+_hook_path = os.path.join(tempfile.gettempdir(), "rthook_handy_build.py")
+with open(_hook_path, "w") as f:
+    f.write(_hook_content)
 
 a = Analysis(
     ['main.py'],
@@ -34,7 +43,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[_hook_path],
     excludes=[],
     noarchive=False,
 )
