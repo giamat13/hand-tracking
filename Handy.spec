@@ -1,40 +1,45 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+import mediapipe
 
-block_cipher = None
+# Bundle the entire mediapipe package (includes .pyd/.so and data files)
+mediapipe_path = os.path.dirname(mediapipe.__file__)
 
 a = Analysis(
-    ['Handy.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[
-        ('utils', 'utils'),
+        (mediapipe_path, 'mediapipe'),
+        ('icon.png', '.'),
+        ('hand_landmarker.task', '.'),
     ],
     hiddenimports=[
+        'mediapipe',
+        'mediapipe.tasks',
+        'mediapipe.tasks.python',
+        'mediapipe.tasks.python.vision',
+        'mediapipe.tasks.python.core',
+        'mediapipe.python',
+        'mediapipe.python.solutions',
+        'mediapipe.python.solutions.hands',
+        'mediapipe.python.solutions.drawing_utils',
+        'customtkinter',
         'pynput',
         'pynput.keyboard',
         'pynput.mouse',
-        'keyboard',
-        'mouse',
-        'PIL',
-        'PIL.Image',
-        'PIL.ImageGrab',
-        'pyperclip',
-        'win32gui',
-        'win32con',
-        'win32api',
-        'pywintypes',
+        'pynput._util',
+        'pynput._util.win32',
+        'cv2',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -50,12 +55,11 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,  # שנה ל-False אם אתה רוצה בלי חלון קונסול
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    uac_admin=True,  # דורש הרשאות אדמין בהרצה
-    icon=None,
+    icon='icon.png',
 )
