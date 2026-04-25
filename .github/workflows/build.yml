@@ -17,7 +17,7 @@ jobs:
           - os: ubuntu-latest
             artifact_name: Handy
           - os: macos-latest
-            artifact_name: Handy
+            artifact_name: Handy.app
 
     runs-on: ${{ matrix.os }}
 
@@ -50,6 +50,10 @@ jobs:
       - name: Build with Nuitka
         run: python build_nuitka.py
 
+      - name: Zip macOS portable app bundle
+        if: runner.os == 'macOS'
+        run: cd release && zip -r Handy-macOS.zip Handy.app
+
       - name: Build installer (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -59,10 +63,8 @@ jobs:
       - name: Build installer (macOS)
         if: runner.os == 'macOS'
         run: |
-          mkdir -p dist_pkg
-          cp release/Handy dist_pkg/
           pkgbuild \
-            --root dist_pkg \
+            --component release/Handy.app \
             --identifier com.handy.app \
             --version ${{ github.ref_name }} \
             --install-location /Applications \
@@ -85,11 +87,19 @@ jobs:
           EOF
           dpkg-deb --build deb_pkg release/Handy-Installer.deb
 
-      - name: Upload portable artifact
+      - name: Upload portable artifact (Windows/Linux)
+        if: runner.os != 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: Handy-${{ runner.os }}-portable
           path: release/${{ matrix.artifact_name }}
+
+      - name: Upload portable artifact (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Handy-macOS-portable
+          path: release/Handy-macOS.zip
 
       - name: Upload installer artifact (Windows)
         if: runner.os == 'Windows'
@@ -127,13 +137,13 @@ jobs:
       - name: Rename artifacts
         run: |
           # Portable
-          mv artifacts/Handy-Windows-portable/Handy.exe  artifacts/Handy-Windows.exe
-          mv artifacts/Handy-Linux-portable/Handy         artifacts/Handy-Linux
-          mv artifacts/Handy-macOS-portable/Handy         artifacts/Handy-macOS
+          mv artifacts/Handy-Windows-portable/Handy.exe    artifacts/Handy-Windows.exe
+          mv artifacts/Handy-Linux-portable/Handy           artifacts/Handy-Linux
+          mv artifacts/Handy-macOS-portable/Handy-macOS.zip artifacts/Handy-macOS.zip
 
           # Installers
-          mv artifacts/Handy-Windows-installer/Handy-Setup.exe  artifacts/Handy-Windows-Setup.exe
-          mv artifacts/Handy-macOS-installer/Handy-Installer.pkg artifacts/Handy-macOS-Installer.pkg
+          mv artifacts/Handy-Windows-installer/Handy-Setup.exe   artifacts/Handy-Windows-Setup.exe
+          mv artifacts/Handy-macOS-installer/Handy-Installer.pkg  artifacts/Handy-macOS-Installer.pkg
           mv artifacts/Handy-Linux-installer/Handy-Installer.deb  artifacts/Handy-Linux-Installer.deb
 
       - name: Create release
@@ -144,5 +154,5 @@ jobs:
             artifacts/Handy-Windows-Setup.exe
             artifacts/Handy-Linux
             artifacts/Handy-Linux-Installer.deb
-            artifacts/Handy-macOS
+            artifacts/Handy-macOS.zip
             artifacts/Handy-macOS-Installer.pkg

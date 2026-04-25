@@ -65,8 +65,8 @@ def build() -> None:
         ]
     elif sys.platform == "darwin":
         cmd += [
+            "--mode=app",
             "--macos-app-name=Handy",
-            "--macos-disable-console",
         ]
 
     cmd.append(str(PROJECT_ROOT / "main.py"))
