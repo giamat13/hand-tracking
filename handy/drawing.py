@@ -13,6 +13,8 @@ from .config import (
 
 
 def draw_skeleton(frame, lm_list: list, color: tuple, h: int, w: int) -> None:
+    if not state.SHOW_LANDMARKS:
+        return
     pts = [(int(lm[0] * w), int(lm[1] * h)) for lm in lm_list]
     for a, b in HAND_CONNECTIONS:
         cv2.line(frame, pts[a], pts[b], (200, 200, 200), 1, cv2.LINE_AA)

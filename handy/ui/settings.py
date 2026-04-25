@@ -123,6 +123,7 @@ def _build(root: ctk.CTk) -> None:
         return cb
 
     # ── Variables ──────────────────────────────────────────────────
+    landmarks_var = tk.BooleanVar(value=state.SHOW_LANDMARKS)
     trail_var    = tk.BooleanVar(value=state.SHOW_TRAIL)
     coords_var   = tk.BooleanVar(value=state.SHOW_COORDS)
     mouse_var    = tk.BooleanVar(value=state.MOUSE_ENABLED)
@@ -137,6 +138,7 @@ def _build(root: ctk.CTk) -> None:
 
     # ── Display ────────────────────────────────────────────────────
     section("▼  Display")
+    add_check("Show landmarks", landmarks_var)
     add_check("Show trail", trail_var)
     add_check("Show coordinates", coords_var)
 
@@ -197,6 +199,7 @@ def _build(root: ctk.CTk) -> None:
         state.DEADZONE       = int(dead_var.get())
         state.CLICK_COOLDOWN = round(cooldown_var.get(), 1)
         state.MOUSE_ENABLED  = mouse_var.get()
+        state.SHOW_LANDMARKS  = landmarks_var.get()
         state.SHOW_TRAIL     = trail_var.get()
         state.SHOW_COORDS    = coords_var.get()
         state.CONTROL_HAND   = hand_var.get()

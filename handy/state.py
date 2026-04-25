@@ -42,6 +42,7 @@ CONTROL_HAND: str = "Right"
 CLICK_COOLDOWN: float = 0.6
 SHOW_TRAIL: bool = True
 SHOW_COORDS: bool = True
+SHOW_LANDMARKS: bool = True
 
 # ── Mouse tracking ─────────────────────────────────────────────────
 smooth_x = None
