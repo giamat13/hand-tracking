@@ -27,7 +27,7 @@ import numpy as np
 # ── Matching sensitivity ───────────────────────────────────────────────────
 MATCH_THRESHOLD: float = 0.20     # max average per-landmark distance for a hit
 MIN_SAMPLES: int = 15             # minimum snapshots before a template is usable
-RECORD_SAMPLES: int = 30          # target number of training frames
+RECORD_SAMPLES: int = 60          # target number of training frames
 
 
 # ── Built-in gestures (produced by gesture.classify_gesture) ──────────────
