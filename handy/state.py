@@ -79,6 +79,14 @@ GESTURE_BINDINGS: dict = {}
 # Recording state (written by gesture_trainer UI, read by camera thread)
 recording_gesture: bool = False       # True while the trainer is capturing
 recording_samples: list = []          # accumulated normalized (21,2) arrays
+recording_motion_points: list = []    # accumulated palm-center motion points
+recording_mode: str = "static"        # "static" | "motion"
+recording_target_frames: int = 60
+recording_batch_total: int = 1
+recording_batch_remaining: int = 0
+
+# Recent palm-center history for motion-gesture matching
+motion_history: deque = deque(maxlen=180)
 
 # ── Gesture trainer window ─────────────────────────────────────────
 gesture_trainer_open: bool = False

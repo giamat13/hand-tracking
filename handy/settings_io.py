@@ -20,6 +20,7 @@ _SETTING_KEYS = [
     "DEADZONE", "MOUSE_ENABLED", "CONTROL_HAND", "CLICK_COOLDOWN",
     "SHOW_TRAIL", "SHOW_COORDS", "SHOW_LANDMARKS",
 ]
+_ACTION_TYPES = {"none", "hotkey", "script"}
 
 
 def _base_dir() -> Path:
@@ -41,6 +42,27 @@ def _gestures_path() -> Path:
     return _base_dir() / "gestures.json"
 
 
+def _normalize_gesture_bindings(raw_bindings) -> dict:
+    normalized: dict = {}
+    if not isinstance(raw_bindings, dict):
+        return normalized
+
+    for gesture_name, binding in raw_bindings.items():
+        if not isinstance(binding, dict):
+            continue
+        action_type = binding.get("type", "none")
+        action_value = binding.get("value", "")
+        if action_type not in _ACTION_TYPES:
+            action_type = "none"
+            action_value = ""
+        normalized[str(gesture_name)] = {
+            "type": action_type,
+            "value": str(action_value).strip(),
+        }
+
+    return normalized
+
+
 # ── Load ───────────────────────────────────────────────────────────────────
 
 def load() -> None:
@@ -60,7 +82,7 @@ def _load_settings() -> None:
                 setattr(state, key, data[key])
         # Gesture bindings live inside settings.json for convenience
         if "GESTURE_BINDINGS" in data:
-            state.GESTURE_BINDINGS = data["GESTURE_BINDINGS"]
+            state.GESTURE_BINDINGS = _normalize_gesture_bindings(data["GESTURE_BINDINGS"])
         print(f"[SETTINGS] loaded from {path}")
     except Exception as exc:
         print(f"[SETTINGS] load failed: {exc}")
@@ -94,7 +116,7 @@ def _save_settings() -> None:
     path = _settings_path()
     try:
         data = {key: getattr(state, key) for key in _SETTING_KEYS}
-        data["GESTURE_BINDINGS"] = state.GESTURE_BINDINGS
+        data["GESTURE_BINDINGS"] = _normalize_gesture_bindings(state.GESTURE_BINDINGS)
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         print(f"[SETTINGS] saved to {path}")
     except Exception as exc:

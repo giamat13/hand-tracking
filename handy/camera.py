@@ -11,7 +11,10 @@ import mediapipe as mp
 
 import handy.state as state
 from .config import COLOR_LEFT, COLOR_RIGHT, MAX_TRAIL
-from .custom_gestures import normalize_landmarks, RECORD_SAMPLES
+from .custom_gestures import (
+    extract_motion_point,
+    normalize_landmarks,
+)
 from .drawing import (
     draw_info_box,
     draw_loading,
@@ -49,8 +52,12 @@ def _key_to_debug(key: int) -> str:
 
 def _draw_recording_overlay(frame, h: int, w: int) -> None:
     """Show a pulsing REC indicator and sample count while capturing."""
-    n = len(state.recording_samples)
-    ratio = min(n / max(RECORD_SAMPLES, 1), 1.0)
+    if state.recording_mode == "motion":
+        n = len(state.recording_motion_points)
+    else:
+        n = len(state.recording_samples)
+    target = max(int(state.recording_target_frames), 1)
+    ratio = min(n / target, 1.0)
 
     # Semi-transparent red bar at the top
     overlay = frame.copy()
@@ -60,7 +67,9 @@ def _draw_recording_overlay(frame, h: int, w: int) -> None:
     # REC text
     pulse = int(time.time() * 4) % 2 == 0
     color = (0, 0, 255) if pulse else (100, 100, 255)
-    cv2.putText(frame, f"REC  {n}/{RECORD_SAMPLES}", (10, 30),
+    current_session = max(state.recording_batch_total - state.recording_batch_remaining + 1, 1)
+    batch_text = f"  session {current_session}/{max(state.recording_batch_total, 1)}"
+    cv2.putText(frame, f"REC  {n}/{target}{batch_text}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
 
 
@@ -83,9 +92,18 @@ def _draw_hand(
 
     tx = int(lm_list[8][0] * w)
     ty = int(lm_list[8][1] * h)
+    motion_point = extract_motion_point(lm_list)
+
+    if idx == 0:
+        state.motion_history.append(motion_point)
 
     up = fingers_up(lm_list, label)
-    gesture = classify_with_custom(up, lm_list, state.CUSTOM_GESTURE_TEMPLATES)
+    gesture = classify_with_custom(
+        up,
+        lm_list,
+        state.CUSTOM_GESTURE_TEMPLATES,
+        motion_points=list(state.motion_history) if idx == 0 else None,
+    )
 
     controls = (
         state.CONTROL_HAND == "Both"
@@ -97,13 +115,19 @@ def _draw_hand(
 
     # ── Recording: capture normalized snapshots ────────────────────────────
     if idx == 0 and state.recording_gesture:
-        if len(state.recording_samples) < RECORD_SAMPLES:
-            norm = normalize_landmarks(lm_list)
-            if norm is not None:
-                state.recording_samples.append(norm)
+        if state.recording_mode == "motion":
+            if len(state.recording_motion_points) < state.recording_target_frames:
+                state.recording_motion_points.append(motion_point)
+            else:
+                state.recording_gesture = False
         else:
-            # Auto-stop when we have enough samples
-            state.recording_gesture = False
+            if len(state.recording_samples) < state.recording_target_frames:
+                norm = normalize_landmarks(lm_list)
+                if norm is not None:
+                    state.recording_samples.append(norm)
+            else:
+                # Auto-stop when we have enough samples
+                state.recording_gesture = False
 
     # ── Action triggering (only first hand, not while recording) ──────────
     if idx == 0 and not state.recording_gesture:
@@ -141,6 +165,7 @@ def _process_frame(frame, h: int, w: int) -> int:
         result = state.detector.detect_for_video(mp_image, timestamp)
         if not result.hand_landmarks:
             state.trails.clear()
+            state.motion_history.clear()
             reset_anchor()
             return 0
         for idx, (hand_lms, hand_info) in enumerate(
@@ -155,6 +180,7 @@ def _process_frame(frame, h: int, w: int) -> int:
         results = state.hands_old.process(rgb)
         if not results.multi_hand_landmarks:
             state.trails.clear()
+            state.motion_history.clear()
             reset_anchor()
             return 0
         for idx, (hand_lm, hand_info) in enumerate(

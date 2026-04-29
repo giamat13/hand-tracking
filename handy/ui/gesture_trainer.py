@@ -1,16 +1,15 @@
 """
 Gesture Trainer window (CustomTkinter).
 
-Changes vs original:
-  - Hotkey field replaced by a "click to record" key-capture button
-    (supports arrows, modifiers, F-keys, media keys, everything)
-  - Delete (✕) button inline next to each custom gesture row
-  - New action type "movement" — gesture enables mouse movement mode
+Highlights:
+  - Multiple training sessions per gesture
+  - Per-session delete controls
+  - Built-in gestures can be disabled/restored
+  - Motion gestures support configurable duration and matching tolerance
 """
 
 from __future__ import annotations
 
-import threading
 import tkinter as tk
 import tkinter.filedialog as fd
 from typing import Optional
@@ -18,25 +17,31 @@ from typing import Optional
 import customtkinter as ctk
 
 import handy.state as state
-from handy.actions import execute_action, reset_cooldown, validate_hotkey, validate_script
-from handy.custom_gestures import BUILTIN_ENTRIES, RECORD_SAMPLES, GestureTemplate
+from handy.actions import reset_cooldown, validate_hotkey, validate_script
+from handy.custom_gestures import (
+    BUILTIN_ENTRIES,
+    MIN_SAMPLES,
+    MOTION_MIN_FRAMES,
+    MOTION_RECORD_FRAMES,
+    RECORD_SAMPLES,
+    GestureSession,
+    GestureTemplate,
+)
 from handy.settings_io import save as save_settings
 
-# ── Palette ────────────────────────────────────────────────────────────────
-_BG  = "#0f0f0f"
+_BG = "#0f0f0f"
 _ACC = "#00ff96"
-_FG  = "#eeeeee"
+_FG = "#eeeeee"
 _DIM = "#555555"
 _ERR = "#ff5555"
 _YEL = "#ffdd55"
-_MOV = "#55aaff"
+_MOT = "#ff9944"
 
-# ── Recording state machine ────────────────────────────────────────────────
-_IDLE      = "idle"
+_IDLE = "idle"
 _RECORDING = "recording"
-_DONE      = "done"
+_DONE = "done"
 
-# ── Key-name normalisation ─────────────────────────────────────────────────
+_ACTION_TYPES = {"none", "hotkey", "script"}
 _KEYSYM_MAP: dict[str, str] = {
     "Left": "left", "Right": "right", "Up": "up", "Down": "down",
     "Home": "home", "End": "end", "Prior": "page up", "Next": "page down",
@@ -61,7 +66,6 @@ _KEYSYM_MAP: dict[str, str] = {
     "XF86AudioRaiseVolume": "volume up", "XF86AudioLowerVolume": "volume down",
     **{f"F{i}": f"f{i}" for i in range(1, 25)},
 }
-
 _MODIFIER_KEYSYMS = {
     "Shift_L", "Shift_R", "Control_L", "Control_R",
     "Alt_L", "Alt_R", "Super_L", "Super_R",
@@ -93,8 +97,6 @@ def _build_combo(modifiers: set[str], main_keysym: str) -> str:
     return "+".join(parts)
 
 
-# ── Public entry point ─────────────────────────────────────────────────────
-
 def show_gesture_trainer(root: ctk.CTk) -> None:
     if state.gesture_trainer_open:
         print("[TRAINER] open request ignored (already open)")
@@ -108,8 +110,6 @@ def show_gesture_trainer(root: ctk.CTk) -> None:
         print(f"[TRAINER] failed to open: {exc}")
         raise
 
-
-# ── Main window class ──────────────────────────────────────────────────────
 
 class _GestureTrainer:
 
@@ -126,7 +126,7 @@ class _GestureTrainer:
         self._win.resizable(True, True)
         sw = self._win.winfo_screenwidth()
         sh = self._win.winfo_screenheight()
-        ww, wh = 860, 600
+        ww, wh = 980, 700
         self._win.geometry(f"{ww}x{wh}+{(sw-ww)//2}+{(sh-wh)//2}")
         self._win.configure(fg_color=_BG)
         self._win.lift()
@@ -137,20 +137,20 @@ class _GestureTrainer:
         self._refresh_list()
         self._poll_recording()
 
-    # ── UI Construction ────────────────────────────────────────────────────
-
     def _build_ui(self) -> None:
         win = self._win
         title_frame = ctk.CTkFrame(win, fg_color="#1a1a1a", corner_radius=0)
         title_frame.pack(fill="x")
         ctk.CTkLabel(
-            title_frame, text="●  GESTURE TRAINER",
-            font=ctk.CTkFont("Consolas", 14, "bold"), text_color=_ACC,
+            title_frame,
+            text="●  GESTURE TRAINER",
+            font=ctk.CTkFont("Consolas", 14, "bold"),
+            text_color=_ACC,
         ).pack(side="left", padx=18, pady=10)
 
         body = ctk.CTkFrame(win, fg_color=_BG)
         body.pack(fill="both", expand=True)
-        body.columnconfigure(0, weight=1, minsize=240)
+        body.columnconfigure(0, weight=1, minsize=250)
         body.columnconfigure(1, weight=2)
         body.rowconfigure(0, weight=1)
 
@@ -164,10 +164,17 @@ class _GestureTrainer:
         scroll.pack(fill="both", expand=True, padx=4, pady=4)
         self._list_scroll = scroll
         ctk.CTkButton(
-            frame, text="+ Add Custom Gesture", command=self._add_new,
-            fg_color="#1e1e1e", hover_color="#2a2a2a", text_color=_ACC,
+            frame,
+            text="+ Add Custom Gesture",
+            command=self._add_new,
+            fg_color="#1e1e1e",
+            hover_color="#2a2a2a",
+            text_color=_ACC,
             font=ctk.CTkFont("Consolas", 10, "bold"),
-            border_width=1, border_color=_ACC, corner_radius=4, height=32,
+            border_width=1,
+            border_color=_ACC,
+            corner_radius=4,
+            height=32,
         ).pack(fill="x", padx=8, pady=6)
 
     def _build_edit_panel(self, parent) -> None:
@@ -177,22 +184,117 @@ class _GestureTrainer:
         scroll.pack(fill="both", expand=True, padx=16, pady=12)
         self._edit_scroll = scroll
 
-        # Name
         self._section("Gesture Name")
         self._name_var = tk.StringVar()
         self._name_entry = ctk.CTkEntry(
-            scroll, textvariable=self._name_var, placeholder_text="e.g.  My Wave",
-            font=ctk.CTkFont("Consolas", 11), fg_color="#1a1a1a",
-            text_color=_FG, border_color=_DIM,
+            scroll,
+            textvariable=self._name_var,
+            placeholder_text="e.g. My Wave",
+            font=ctk.CTkFont("Consolas", 11),
+            fg_color="#1a1a1a",
+            text_color=_FG,
+            border_color=_DIM,
         )
         self._name_entry.pack(fill="x", pady=(2, 10))
         self._sep()
 
-        # Recording
-        self._section("Training Samples")
+        self._section("Gesture Type")
+        self._gesture_kind_var = tk.StringVar(value="static")
+        self._kind_buttons = []
+        for val, label, colour in [
+            ("static", "Static (hold pose)", _FG),
+            ("motion", "Motion (move hand)", _MOT),
+        ]:
+            btn = ctk.CTkRadioButton(
+                scroll,
+                text=label,
+                variable=self._gesture_kind_var,
+                value=val,
+                command=self._on_gesture_kind_change,
+                font=ctk.CTkFont("Consolas", 10),
+                text_color=colour,
+                fg_color=_ACC,
+                hover_color="#00cc77",
+                border_color=_ACC,
+            )
+            btn.pack(anchor="w", pady=2)
+            self._kind_buttons.append(btn)
+        self._kind_hint = ctk.CTkLabel(
+            scroll,
+            text="",
+            font=ctk.CTkFont("Consolas", 9),
+            text_color=_DIM,
+            anchor="w",
+        )
+        self._kind_hint.pack(fill="x", pady=(2, 10))
+        self._sep()
+
+        self._section("Training Setup")
+        setup_row = ctk.CTkFrame(scroll, fg_color=_BG)
+        setup_row.pack(fill="x", pady=(2, 4))
+        ctk.CTkLabel(setup_row, text="Sessions to add", font=ctk.CTkFont("Consolas", 10), text_color=_FG).pack(side="left")
+        self._session_batch_var = tk.IntVar(value=1)
+        self._session_batch_entry = ctk.CTkEntry(
+            setup_row,
+            textvariable=self._session_batch_var,
+            width=60,
+            font=ctk.CTkFont("Consolas", 10),
+            fg_color="#1a1a1a",
+            text_color=_FG,
+            border_color=_DIM,
+            justify="center",
+        )
+        self._session_batch_entry.pack(side="left", padx=(8, 18))
+        ctk.CTkLabel(setup_row, text="Motion seconds", font=ctk.CTkFont("Consolas", 10), text_color=_FG).pack(side="left")
+        self._motion_seconds_var = tk.StringVar(value="1.8")
+        self._motion_seconds_entry = ctk.CTkEntry(
+            setup_row,
+            textvariable=self._motion_seconds_var,
+            width=70,
+            font=ctk.CTkFont("Consolas", 10),
+            fg_color="#1a1a1a",
+            text_color=_FG,
+            border_color=_DIM,
+            justify="center",
+        )
+        self._motion_seconds_entry.pack(side="left", padx=(8, 0))
+
+        tolerance_row = ctk.CTkFrame(scroll, fg_color=_BG)
+        tolerance_row.pack(fill="x", pady=(2, 6))
+        ctk.CTkLabel(
+            tolerance_row,
+            text="Motion matching",
+            font=ctk.CTkFont("Consolas", 10),
+            text_color=_FG,
+        ).pack(side="left")
+        self._motion_tolerance_var = tk.DoubleVar(value=1.25)
+        self._motion_tolerance_slider = ctk.CTkSlider(
+            tolerance_row,
+            from_=0.8,
+            to=1.8,
+            number_of_steps=20,
+            variable=self._motion_tolerance_var,
+            command=self._on_motion_tolerance_change,
+            progress_color=_MOT,
+            button_color=_MOT,
+            button_hover_color="#ffbb66",
+        )
+        self._motion_tolerance_slider.pack(side="left", fill="x", expand=True, padx=(12, 8))
+        self._motion_tolerance_label = ctk.CTkLabel(
+            tolerance_row,
+            text="125%",
+            font=ctk.CTkFont("Consolas", 10),
+            text_color=_MOT,
+            width=56,
+        )
+        self._motion_tolerance_label.pack(side="left")
+
         self._sample_label = ctk.CTkLabel(
-            scroll, text="0 / 30 samples", font=ctk.CTkFont("Consolas", 10),
-            text_color=_DIM, anchor="w",
+            scroll,
+            text="0 / 60 samples",
+            font=ctk.CTkFont("Consolas", 10),
+            text_color=_DIM,
+            anchor="w",
         )
         self._sample_label.pack(fill="x")
         self._progress = ctk.CTkProgressBar(scroll, progress_color=_ACC, fg_color="#333")
@@ -202,119 +304,223 @@ class _GestureTrainer:
         btn_row = ctk.CTkFrame(scroll, fg_color=_BG)
         btn_row.pack(fill="x", pady=(2, 4))
         self._rec_btn = ctk.CTkButton(
-            btn_row, text="● Record", command=self._toggle_record,
-            fg_color="#1e1e1e", hover_color="#2a2a2a", text_color=_YEL,
+            btn_row,
+            text="● Record",
+            command=self._toggle_record,
+            fg_color="#1e1e1e",
+            hover_color="#2a2a2a",
+            text_color=_YEL,
             font=ctk.CTkFont("Consolas", 10, "bold"),
-            border_width=1, border_color=_YEL, corner_radius=4, width=120,
+            border_width=1,
+            border_color=_YEL,
+            corner_radius=4,
+            width=120,
         )
         self._rec_btn.pack(side="left", padx=(0, 8))
         self._clear_btn = ctk.CTkButton(
-            btn_row, text="✕ Clear", command=self._clear_samples,
-            fg_color="#1e1e1e", hover_color="#2a2a2a", text_color=_ERR,
+            btn_row,
+            text="Clear All Sessions",
+            command=self._clear_sessions,
+            fg_color="#1e1e1e",
+            hover_color="#2a2a2a",
+            text_color=_ERR,
             font=ctk.CTkFont("Consolas", 10),
-            border_width=1, border_color=_ERR, corner_radius=4, width=80,
+            border_width=1,
+            border_color=_ERR,
+            corner_radius=4,
+            width=140,
         )
         self._clear_btn.pack(side="left")
 
         self._status_label = ctk.CTkLabel(
-            scroll, text="Select or create a gesture to begin",
-            font=ctk.CTkFont("Consolas", 10), text_color=_DIM, anchor="w",
+            scroll,
+            text="Select or create a gesture to begin",
+            font=ctk.CTkFont("Consolas", 10),
+            text_color=_DIM,
+            anchor="w",
         )
         self._status_label.pack(fill="x", pady=(2, 10))
         self._sep()
 
-        # Action
+        self._section("Training Sessions")
+        self._session_summary_label = ctk.CTkLabel(
+            scroll,
+            text="No sessions yet",
+            font=ctk.CTkFont("Consolas", 9),
+            text_color=_DIM,
+            anchor="w",
+        )
+        self._session_summary_label.pack(fill="x")
+        self._session_scroll = ctk.CTkScrollableFrame(scroll, fg_color="#141414", height=160)
+        self._session_scroll.pack(fill="x", pady=(4, 10))
+        self._sep()
+
         self._section("Action on Gesture Detected")
         self._action_var = tk.StringVar(value="none")
         for val, label, colour in [
-            ("none",     "None",                   _FG),
-            ("hotkey",   "Hotkey",                 _FG),
-            ("script",   "Script",                 _FG),
-            ("movement", "Movement (move mouse)",  _MOV),
+            ("none", "None", _FG),
+            ("hotkey", "Hotkey", _FG),
+            ("script", "Script", _FG),
         ]:
             ctk.CTkRadioButton(
-                scroll, text=label, variable=self._action_var, value=val,
+                scroll,
+                text=label,
+                variable=self._action_var,
+                value=val,
                 command=self._on_action_type_change,
-                font=ctk.CTkFont("Consolas", 10), text_color=colour,
-                fg_color=_ACC, hover_color="#00cc77", border_color=_ACC,
+                font=ctk.CTkFont("Consolas", 10),
+                text_color=colour,
+                fg_color=_ACC,
+                hover_color="#00cc77",
+                border_color=_ACC,
             ).pack(anchor="w", pady=2)
 
-        # Hotkey capture panel
         self._hotkey_frame = ctk.CTkFrame(scroll, fg_color=_BG)
         self._hotkey_var = tk.StringVar()
         self._key_capture_btn = ctk.CTkButton(
             self._hotkey_frame,
             text="Click here then press a key…",
             command=self._start_key_capture,
-            fg_color="#1a1a1a", hover_color="#252525", text_color=_DIM,
+            fg_color="#1a1a1a",
+            hover_color="#252525",
+            text_color=_DIM,
             font=ctk.CTkFont("Consolas", 10),
-            border_width=1, border_color=_DIM, corner_radius=4, anchor="w",
+            border_width=1,
+            border_color=_DIM,
+            corner_radius=4,
+            anchor="w",
         )
         self._key_capture_btn.pack(fill="x")
         self._clear_hotkey_btn = ctk.CTkButton(
-            self._hotkey_frame, text="Clear", command=self._clear_hotkey,
-            fg_color="#1e1e1e", hover_color="#2a2a2a", text_color=_ERR,
+            self._hotkey_frame,
+            text="Clear",
+            command=self._clear_hotkey,
+            fg_color="#1e1e1e",
+            hover_color="#2a2a2a",
+            text_color=_ERR,
             font=ctk.CTkFont("Consolas", 9),
-            border_width=1, border_color=_ERR, corner_radius=4, width=60, height=26,
+            border_width=1,
+            border_color=_ERR,
+            corner_radius=4,
+            width=60,
+            height=26,
         )
         self._clear_hotkey_btn.pack(anchor="e", pady=(4, 0))
 
-        # Script panel
         self._script_frame = ctk.CTkFrame(scroll, fg_color=_BG)
         self._action_value_var = tk.StringVar()
         self._action_entry = ctk.CTkEntry(
-            self._script_frame, textvariable=self._action_value_var,
+            self._script_frame,
+            textvariable=self._action_value_var,
             placeholder_text="Path or shell command",
-            font=ctk.CTkFont("Consolas", 10), fg_color="#1a1a1a",
-            text_color=_FG, border_color=_DIM,
+            font=ctk.CTkFont("Consolas", 10),
+            fg_color="#1a1a1a",
+            text_color=_FG,
+            border_color=_DIM,
         )
         self._action_entry.pack(side="left", fill="x", expand=True)
         self._browse_btn = ctk.CTkButton(
-            self._script_frame, text="Browse…", command=self._browse_script,
-            fg_color="#1e1e1e", hover_color="#2a2a2a", text_color=_FG,
-            font=ctk.CTkFont("Consolas", 10), width=80, corner_radius=4,
+            self._script_frame,
+            text="Browse…",
+            command=self._browse_script,
+            fg_color="#1e1e1e",
+            hover_color="#2a2a2a",
+            text_color=_FG,
+            font=ctk.CTkFont("Consolas", 10),
+            width=80,
+            corner_radius=4,
         )
         self._browse_btn.pack(side="left", padx=(6, 0))
 
-        # Movement info panel
-        self._movement_frame = ctk.CTkFrame(scroll, fg_color="#0a1a2a", corner_radius=6)
-        ctk.CTkLabel(
-            self._movement_frame,
-            text="🖱  When this gesture is detected, the hand position\n"
-                 "    will control the mouse cursor directly.\n"
-                 "    Enable Mouse Control in Settings to activate.",
-            font=ctk.CTkFont("Consolas", 9), text_color=_MOV,
-            justify="left", anchor="w",
-        ).pack(padx=10, pady=8, fill="x")
-
         self._action_hint = ctk.CTkLabel(
-            scroll, text="", font=ctk.CTkFont("Consolas", 9),
-            text_color=_DIM, anchor="w",
+            scroll,
+            text="",
+            font=ctk.CTkFont("Consolas", 9),
+            text_color=_DIM,
+            anchor="w",
         )
         self._action_hint.pack(fill="x", pady=(2, 10))
         self._sep()
 
-        # Save / Delete
         btn_row2 = ctk.CTkFrame(scroll, fg_color=_BG)
         btn_row2.pack(fill="x", pady=(4, 0))
         self._save_btn = ctk.CTkButton(
-            btn_row2, text="Save", command=self._save,
-            fg_color=_ACC, hover_color="#00cc77", text_color="#000",
-            font=ctk.CTkFont("Consolas", 11, "bold"), corner_radius=6, width=110,
+            btn_row2,
+            text="Save",
+            command=self._save,
+            fg_color=_ACC,
+            hover_color="#00cc77",
+            text_color="#000",
+            font=ctk.CTkFont("Consolas", 11, "bold"),
+            corner_radius=6,
+            width=110,
         )
         self._save_btn.pack(side="left", padx=(0, 10))
         self._del_btn = ctk.CTkButton(
-            btn_row2, text="Delete Gesture", command=self._delete,
-            fg_color="#1e1e1e", hover_color="#330000", text_color=_ERR,
+            btn_row2,
+            text="Delete Gesture",
+            command=self._delete,
+            fg_color="#1e1e1e",
+            hover_color="#330000",
+            text_color=_ERR,
             font=ctk.CTkFont("Consolas", 10),
-            border_width=1, border_color=_ERR, corner_radius=6, width=110,
+            border_width=1,
+            border_color=_ERR,
+            corner_radius=6,
+            width=130,
         )
         self._del_btn.pack(side="left")
 
+        self._on_motion_tolerance_change(self._motion_tolerance_var.get())
+        self._on_gesture_kind_change()
         self._on_action_type_change()
         self._set_edit_active(False)
 
-    # ── Key capture ────────────────────────────────────────────────────────
+    def _find_template(self, name: str) -> Optional[GestureTemplate]:
+        for tmpl in state.CUSTOM_GESTURE_TEMPLATES:
+            if tmpl.name == name:
+                return tmpl
+        return None
+
+    def _ensure_template(self, name: str, builtin: bool) -> GestureTemplate:
+        tmpl = self._find_template(name)
+        if tmpl is None:
+            tmpl = GestureTemplate(name=name, builtin=builtin)
+            state.CUSTOM_GESTURE_TEMPLATES.append(tmpl)
+        tmpl.builtin = builtin
+        return tmpl
+
+    def _effective_template_kind(self, tmpl: Optional[GestureTemplate]) -> str:
+        if tmpl is not None and tmpl.kind in {"static", "motion"}:
+            return tmpl.kind
+        return "static"
+
+    def _selected_gesture_kind(self) -> str:
+        kind = self._gesture_kind_var.get()
+        return kind if kind in {"static", "motion"} else "static"
+
+    def _selected_batch_count(self) -> int:
+        try:
+            value = int(str(self._session_batch_var.get()).strip())
+        except Exception:
+            value = 1
+        return max(1, min(value, 10))
+
+    def _selected_motion_seconds(self) -> float:
+        try:
+            value = float(str(self._motion_seconds_var.get()).strip())
+        except Exception:
+            value = 1.8
+        return max(0.5, min(value, 6.0))
+
+    def _selected_motion_frames(self) -> int:
+        return max(MOTION_MIN_FRAMES, min(int(round(self._selected_motion_seconds() * 30)), 180))
+
+    def _record_target(self, kind: str) -> int:
+        return self._selected_motion_frames() if kind == "motion" else RECORD_SAMPLES
+
+    def _record_minimum(self, kind: str) -> int:
+        return MOTION_MIN_FRAMES if kind == "motion" else MIN_SAMPLES
 
     def _start_key_capture(self) -> None:
         if self._capturing_key:
@@ -323,9 +529,11 @@ class _GestureTrainer:
         self._held_modifiers.clear()
         self._key_capture_btn.configure(
             text="⌨  Press any key (arrows, F-keys, Ctrl/Shift/Alt…)",
-            text_color=_YEL, border_color=_YEL, fg_color="#1a1500",
+            text_color=_YEL,
+            border_color=_YEL,
+            fg_color="#1a1500",
         )
-        self._win.bind("<KeyPress>",   self._on_key_press,   add=True)
+        self._win.bind("<KeyPress>", self._on_key_press, add=True)
         self._win.bind("<KeyRelease>", self._on_key_release, add=True)
         self._win.focus_force()
 
@@ -345,15 +553,16 @@ class _GestureTrainer:
         keysym = event.keysym
         if keysym in _MODIFIER_KEYSYMS:
             self._held_modifiers.add(keysym)
-            mod_label = "+".join(
-                k.split("_")[0].lower() for k in sorted(self._held_modifiers)
-            )
+            mod_label = "+".join(k.split("_")[0].lower() for k in sorted(self._held_modifiers))
             self._key_capture_btn.configure(text=f"⌨  {mod_label}+…")
             return
         combo = _build_combo(self._held_modifiers, keysym)
         self._hotkey_var.set(combo)
         self._key_capture_btn.configure(
-            text=f"  {combo}", text_color=_ACC, border_color=_ACC, fg_color="#001a0f",
+            text=f"  {combo}",
+            text_color=_ACC,
+            border_color=_ACC,
+            fg_color="#001a0f",
         )
         self._stop_key_capture()
         self._action_hint.configure(text="✓ Key captured — press Save to apply", text_color=_ACC)
@@ -366,25 +575,65 @@ class _GestureTrainer:
         self._hotkey_var.set("")
         self._key_capture_btn.configure(
             text="Click here then press a key…",
-            text_color=_DIM, border_color=_DIM, fg_color="#1a1a1a",
+            text_color=_DIM,
+            border_color=_DIM,
+            fg_color="#1a1a1a",
         )
         self._action_hint.configure(text="", text_color=_DIM)
 
-    # ── List helpers ───────────────────────────────────────────────────────
+    def _on_motion_tolerance_change(self, _value) -> None:
+        percent = int(round(self._motion_tolerance_var.get() * 100))
+        self._motion_tolerance_label.configure(text=f"{percent}%")
+
+    def _set_kind_buttons_state(self, enabled: bool) -> None:
+        state_ = "normal" if enabled else "disabled"
+        for btn in self._kind_buttons:
+            try:
+                btn.configure(state=state_)
+            except Exception:
+                pass
+
+    def _on_gesture_kind_change(self) -> None:
+        kind = self._selected_gesture_kind()
+        if kind == "motion":
+            self._kind_hint.configure(
+                text="Use this for a moving gesture like waving. You can tune time and matching below.",
+                text_color=_MOT,
+            )
+            self._motion_seconds_entry.configure(state="normal")
+            self._motion_tolerance_slider.configure(state="normal")
+        else:
+            self._kind_hint.configure(
+                text="Use this for a pose you hold steady. New training sessions add to the existing ones.",
+                text_color=_DIM,
+            )
+            self._motion_seconds_entry.configure(state="disabled")
+            self._motion_tolerance_slider.configure(state="disabled")
+
+        if self._sel_name is not None:
+            tmpl = self._find_template(self._sel_name)
+            if tmpl is not None and kind == "motion":
+                self._motion_tolerance_var.set(tmpl.motion_tolerance)
+            self._on_motion_tolerance_change(self._motion_tolerance_var.get())
+            self._update_sample_display(tmpl, kind_override=kind)
+            self._refresh_sessions()
 
     def _refresh_list(self) -> None:
-        for w in self._list_scroll.winfo_children():
-            w.destroy()
+        for widget in self._list_scroll.winfo_children():
+            widget.destroy()
 
         self._section_header("▼ Custom Gestures", self._list_scroll)
-        custom = state.CUSTOM_GESTURE_TEMPLATES
+        custom = [tmpl for tmpl in state.CUSTOM_GESTURE_TEMPLATES if not tmpl.builtin]
         if custom:
-            for tmpl in custom:
+            for tmpl in sorted(custom, key=lambda item: item.name.lower()):
                 self._list_row(tmpl.name, is_builtin=False)
         else:
             ctk.CTkLabel(
-                self._list_scroll, text="  (none yet)",
-                font=ctk.CTkFont("Consolas", 9), text_color=_DIM, anchor="w",
+                self._list_scroll,
+                text="  (none yet)",
+                font=ctk.CTkFont("Consolas", 9),
+                text_color=_DIM,
+                anchor="w",
             ).pack(fill="x", padx=8)
 
         self._section_header("▼ Built-in Gestures", self._list_scroll)
@@ -393,74 +642,88 @@ class _GestureTrainer:
 
     def _section_header(self, text: str, parent) -> None:
         ctk.CTkLabel(
-            parent, text=text,
-            font=ctk.CTkFont("Consolas", 10, "bold"), text_color=_ACC, anchor="w",
+            parent,
+            text=text,
+            font=ctk.CTkFont("Consolas", 10, "bold"),
+            text_color=_ACC,
+            anchor="w",
         ).pack(fill="x", padx=8, pady=(10, 2))
 
     def _list_row(self, name: str, is_builtin: bool) -> None:
+        tmpl = self._find_template(name)
         binding = state.GESTURE_BINDINGS.get(name, {})
-        btype   = binding.get("type", "none")
-        bval    = binding.get("value", "")
+        btype = binding.get("type", "none")
+        bval = binding.get("value", "")
 
         tag = ""
+        if tmpl is not None and tmpl.deleted:
+            tag += "  ~ deleted"
+        elif tmpl is not None and tmpl.kind == "motion":
+            tag += "  ~ motion"
+        if tmpl is not None and tmpl.session_count():
+            tag += f"  [{tmpl.trained_session_count()}/{tmpl.session_count()} sessions]"
         if btype == "hotkey":
-            tag = f"  ⌨ {bval}"
+            tag += f"  ⌨ {bval}"
         elif btype == "script":
-            tag = f"  ▶ {bval[-22:]}…" if len(bval) > 25 else f"  ▶ {bval}"
-        elif btype == "movement":
-            tag = "  🖱"
+            tag += f"  ▶ {bval[-22:]}…" if len(bval) > 25 else f"  ▶ {bval}"
 
-        is_sel = (name == self._sel_name)
-        bg     = "#1e3a2f" if is_sel else "#1a1a1a"
-
+        is_sel = name == self._sel_name
+        bg = "#1e3a2f" if is_sel else "#1a1a1a"
         row = ctk.CTkFrame(self._list_scroll, fg_color=bg, corner_radius=4)
         row.pack(fill="x", padx=6, pady=2)
-
-        name_lbl = ctk.CTkLabel(
-            row, text=f"  {'⚙' if is_builtin else '●'} {name}{tag}",
+        label = ctk.CTkLabel(
+            row,
+            text=f"  {'⚙' if is_builtin else '●'} {name}{tag}",
             font=ctk.CTkFont("Consolas", 10),
-            text_color=_ACC if is_sel else _FG, anchor="w",
+            text_color=_ACC if is_sel else _FG,
+            anchor="w",
         )
-        name_lbl.pack(side="left", padx=4, pady=5, fill="x", expand=True)
+        label.pack(side="left", padx=4, pady=5, fill="x", expand=True)
 
-        # Inline ✕ delete button for custom gestures
         if not is_builtin:
             del_btn = ctk.CTkButton(
-                row, text="✕", width=28, height=24,
-                fg_color="#1a1a1a", hover_color="#330000", text_color=_ERR,
+                row,
+                text="✕",
+                width=28,
+                height=24,
+                fg_color="#1a1a1a",
+                hover_color="#330000",
+                text_color=_ERR,
                 font=ctk.CTkFont("Consolas", 10, "bold"),
-                corner_radius=4, border_width=0,
+                corner_radius=4,
+                border_width=0,
             )
             del_btn.configure(command=lambda n=name: self._delete_by_name(n))
             del_btn.pack(side="right", padx=(0, 6))
 
-        for widget in [row, name_lbl]:
+        for widget in [row, label]:
             widget.bind("<Button-1>", lambda _e, n=name, b=is_builtin: self._select(n, b))
-
-    # ── Selection ─────────────────────────────────────────────────────────
 
     def _select(self, name: str, is_builtin: bool) -> None:
         if self._rec_state == _RECORDING:
             self._stop_record()
         self._stop_key_capture()
-        self._sel_name       = name
+        self._sel_name = name
         self._sel_is_builtin = is_builtin
         self._refresh_list()
         self._set_edit_active(True)
 
+        tmpl = self._ensure_template(name, builtin=is_builtin) if is_builtin else self._find_template(name)
         self._name_var.set(name)
         self._name_entry.configure(state="disabled" if is_builtin else "normal")
 
-        tmpl = self._find_template(name)   # works for both custom and built-in
-        self._update_sample_display(tmpl)
-
-        # Recording is allowed for built-ins too (they get an override template)
-        self._rec_btn.configure(state="normal")
-        self._clear_btn.configure(state="normal")
+        kind = self._effective_template_kind(tmpl)
+        self._gesture_kind_var.set(kind)
+        self._set_kind_buttons_state(not is_builtin)
+        self._motion_tolerance_var.set(tmpl.motion_tolerance if tmpl is not None else 1.25)
+        self._on_motion_tolerance_change(self._motion_tolerance_var.get())
 
         binding = state.GESTURE_BINDINGS.get(name, {"type": "none", "value": ""})
-        atype   = binding.get("type", "none")
-        aval    = binding.get("value", "")
+        atype = binding.get("type", "none")
+        aval = binding.get("value", "")
+        if atype not in _ACTION_TYPES:
+            atype = "none"
+            aval = ""
         self._action_var.set(atype)
 
         if atype == "hotkey":
@@ -475,29 +738,86 @@ class _GestureTrainer:
             self._hotkey_var.set("")
             self._key_capture_btn.configure(
                 text="Click here then press a key…",
-                text_color=_DIM, border_color=_DIM, fg_color="#1a1a1a",
+                text_color=_DIM,
+                border_color=_DIM,
+                fg_color="#1a1a1a",
             )
 
         self._action_value_var.set(aval if atype == "script" else "")
+        self._del_btn.configure(text="Restore Gesture" if tmpl and tmpl.deleted else "Delete Gesture")
+
+        self._on_gesture_kind_change()
         self._on_action_type_change()
-        self._del_btn.configure(state="normal" if not is_builtin else "disabled")
+        self._update_sample_display(tmpl, kind_override=kind)
+        self._refresh_sessions()
+
+    def _refresh_sessions(self) -> None:
+        for widget in self._session_scroll.winfo_children():
+            widget.destroy()
+
+        if self._sel_name is None:
+            self._session_summary_label.configure(text="No gesture selected", text_color=_DIM)
+            return
+
+        tmpl = self._find_template(self._sel_name)
+        if tmpl is None or not tmpl.sessions:
+            self._session_summary_label.configure(text="No sessions yet", text_color=_DIM)
+            return
+
+        trained = tmpl.trained_session_count()
+        total = tmpl.session_count()
+        status = "deleted" if tmpl.deleted else "active"
+        self._session_summary_label.configure(
+            text=f"{trained}/{total} trained sessions  •  {status}",
+            text_color=_ACC if trained else _DIM,
+        )
+
+        for index, session in enumerate(tmpl.sessions, start=1):
+            row = ctk.CTkFrame(self._session_scroll, fg_color="#1b1b1b", corner_radius=4)
+            row.pack(fill="x", padx=4, pady=2)
+            if session.kind == "motion":
+                info = (
+                    f"Session {index}  •  motion  •  {session.motion_frame_count} frames"
+                    f"  •  target {session.target_frames}"
+                )
+            else:
+                info = (
+                    f"Session {index}  •  static  •  {len(session.samples)} samples"
+                    f"  •  target {session.target_frames}"
+                )
+            if not session.is_trained():
+                info += "  •  weak"
+            ctk.CTkLabel(
+                row,
+                text=info,
+                font=ctk.CTkFont("Consolas", 9),
+                text_color=_FG,
+                anchor="w",
+            ).pack(side="left", padx=8, pady=4, fill="x", expand=True)
+            del_btn = ctk.CTkButton(
+                row,
+                text="Delete Session",
+                width=104,
+                height=24,
+                fg_color="#1e1e1e",
+                hover_color="#330000",
+                text_color=_ERR,
+                font=ctk.CTkFont("Consolas", 9),
+                border_width=1,
+                border_color=_ERR,
+                corner_radius=4,
+                command=lambda sid=session.id: self._delete_session(sid),
+            )
+            del_btn.pack(side="right", padx=6, pady=4)
 
     def _add_new(self) -> None:
         if self._rec_state == _RECORDING:
             self._stop_record()
-        name = f"Gesture {len(state.CUSTOM_GESTURE_TEMPLATES) + 1}"
-        tmpl = GestureTemplate(name=name)
+        name = f"Gesture {len([t for t in state.CUSTOM_GESTURE_TEMPLATES if not t.builtin]) + 1}"
+        tmpl = GestureTemplate(name=name, builtin=False)
         state.CUSTOM_GESTURE_TEMPLATES.append(tmpl)
         self._refresh_list()
         self._select(name, is_builtin=False)
-
-    def _find_template(self, name: str) -> Optional[GestureTemplate]:
-        for t in state.CUSTOM_GESTURE_TEMPLATES:
-            if t.name == name:
-                return t
-        return None
-
-    # ── Recording ─────────────────────────────────────────────────────────
 
     def _toggle_record(self) -> None:
         if self._rec_state == _RECORDING:
@@ -508,115 +828,216 @@ class _GestureTrainer:
     def _start_record(self) -> None:
         if self._sel_name is None:
             return
-        # For built-in gestures, create an override template if needed
-        tmpl = self._find_template(self._sel_name)
-        if tmpl is None:
-            tmpl = GestureTemplate(name=self._sel_name)
-            state.CUSTOM_GESTURE_TEMPLATES.append(tmpl)
-        tmpl.clear_samples()
+        tmpl = self._ensure_template(self._sel_name, builtin=self._sel_is_builtin)
+        kind = self._selected_gesture_kind()
+        target = self._record_target(kind)
+        tmpl.kind = kind
+        tmpl.deleted = False
+        tmpl.motion_tolerance = self._motion_tolerance_var.get()
+
         state.recording_samples = []
+        state.recording_motion_points = []
+        state.recording_mode = kind
+        state.recording_target_frames = target
+        state.recording_batch_total = self._selected_batch_count()
+        state.recording_batch_remaining = state.recording_batch_total
         state.recording_gesture = True
         self._rec_state = _RECORDING
         self._rec_btn.configure(text="■ Stop", text_color=_ERR, border_color=_ERR)
-        self._status_label.configure(text="🔴 Hold your gesture steady…", text_color=_YEL)
+        self._refresh_list()
+        self._update_recording_status()
+        self._update_sample_display(tmpl, kind_override=kind)
+
+    def _finish_current_session(self, keep_recording: bool) -> None:
+        if self._sel_name is None:
+            return
+        tmpl = self._ensure_template(self._sel_name, builtin=self._sel_is_builtin)
+        kind = state.recording_mode
+        added: Optional[GestureSession] = None
+
+        if kind == "motion":
+            points = list(state.recording_motion_points)
+            if points:
+                added = tmpl.add_motion_session(points, target_frames=state.recording_target_frames)
+            state.recording_motion_points = []
+        else:
+            samples = list(state.recording_samples)
+            if samples:
+                added = tmpl.add_static_session(samples, target_frames=state.recording_target_frames)
+            state.recording_samples = []
+
+        if added is not None:
+            tmpl.deleted = False
+
+        if state.recording_batch_remaining > 0:
+            state.recording_batch_remaining -= 1
+
+        if keep_recording and state.recording_batch_remaining > 0:
+            state.recording_gesture = True
+            self._update_recording_status()
+        else:
+            state.recording_gesture = False
+            state.recording_batch_total = 1
+            state.recording_batch_remaining = 0
+            self._rec_state = _DONE
+            self._rec_btn.configure(text="● Record", text_color=_YEL, border_color=_YEL)
+            if added is not None:
+                self._status_label.configure(text="✓ Session saved", text_color=_ACC)
+            elif kind == "motion":
+                self._status_label.configure(text="Motion too weak — try a clearer movement", text_color=_YEL)
+            else:
+                self._status_label.configure(text="Need more samples in this session", text_color=_YEL)
+
+        self._refresh_list()
+        self._refresh_sessions()
+        self._update_sample_display(tmpl, kind_override=tmpl.kind)
 
     def _stop_record(self) -> None:
-        state.recording_gesture = False
-        self._rec_state = _DONE
-        self._rec_btn.configure(text="● Record", text_color=_YEL, border_color=_YEL)
-        if self._sel_name:
-            tmpl = self._find_template(self._sel_name)
-            if tmpl is not None and state.recording_samples:
-                tmpl.samples = list(state.recording_samples)
-                state.recording_samples = []
-                self._update_sample_display(tmpl)
+        if self._rec_state != _RECORDING:
+            return
+        self._finish_current_session(keep_recording=False)
+        state.recording_mode = "static"
 
-    def _clear_samples(self) -> None:
+    def _clear_sessions(self) -> None:
         if self._rec_state == _RECORDING:
             self._stop_record()
-        if self._sel_name:
-            tmpl = self._find_template(self._sel_name)
-            if tmpl:
-                tmpl.clear_samples()
-                state.recording_samples = []
-                self._update_sample_display(tmpl)
-
-    def _update_sample_display(self, tmpl) -> None:
-        is_builtin_override = (tmpl is not None and self._sel_is_builtin)
+        if self._sel_name is None:
+            return
+        tmpl = self._find_template(self._sel_name)
         if tmpl is None:
-            count, total, trained = 0, RECORD_SAMPLES, False
-        else:
-            count   = min(tmpl.sample_count(), RECORD_SAMPLES)
-            total   = RECORD_SAMPLES
-            trained = tmpl.is_trained()
+            return
+        tmpl.clear_sessions()
+        tmpl.deleted = False if not self._sel_is_builtin else tmpl.deleted
+        self._refresh_sessions()
+        self._update_sample_display(tmpl, kind_override=self._effective_template_kind(tmpl))
 
-        self._progress.set(count / total if total else 0)
-        self._sample_label.configure(
-            text=f"{count} / {total} samples" + ("  (override)" if is_builtin_override and count > 0 else "")
-        )
+    def _delete_session(self, session_id: str) -> None:
+        if self._rec_state == _RECORDING:
+            self._stop_record()
+        if self._sel_name is None:
+            return
+        tmpl = self._find_template(self._sel_name)
+        if tmpl is None:
+            return
+        if tmpl.delete_session(session_id):
+            save_settings()
+            self._refresh_list()
+            self._refresh_sessions()
+            self._update_sample_display(tmpl, kind_override=tmpl.kind)
+            self._status_label.configure(text="Session deleted", text_color=_DIM)
 
-        if trained:
+    def _update_recording_status(self) -> None:
+        current = max(state.recording_batch_total - state.recording_batch_remaining + 1, 1)
+        total = max(state.recording_batch_total, 1)
+        if state.recording_mode == "motion":
+            secs = self._selected_motion_seconds()
             self._status_label.configure(
-                text="✓ Trained" + (" — overrides built-in" if is_builtin_override else ""),
-                text_color=_ACC,
+                text=f"🔴 Recording motion session {current}/{total}  •  {secs:.1f}s",
+                text_color=_YEL,
             )
-        elif count > 0:
-            self._status_label.configure(
-                text=f"Need {total - count} more samples", text_color=_YEL)
         else:
-            self._status_label.configure(text="No samples — click Record", text_color=_DIM)
+            self._status_label.configure(
+                text=f"🔴 Hold steady for static session {current}/{total}",
+                text_color=_YEL,
+            )
+
+    def _update_sample_display(self, tmpl: Optional[GestureTemplate], kind_override: Optional[str] = None) -> None:
+        kind = kind_override or self._selected_gesture_kind()
+        total = state.recording_target_frames if self._rec_state == _RECORDING and state.recording_mode == kind else self._record_target(kind)
+        minimum = self._record_minimum(kind)
+        current_count = len(state.recording_motion_points) if kind == "motion" else len(state.recording_samples)
+
+        if self._rec_state == _RECORDING and state.recording_mode == kind:
+            count = current_count
+        else:
+            count = 0
+
+        self._progress.configure(progress_color=_MOT if kind == "motion" else _ACC)
+        self._progress.set(min(count / max(total, 1), 1.0))
+
+        suffix = " motion frames" if kind == "motion" else " samples"
+        self._sample_label.configure(text=f"{count} / {total}{suffix}")
+
+        if tmpl is None:
+            return
+
+        trained_sessions = tmpl.trained_session_count()
+        total_sessions = tmpl.session_count()
+        if self._rec_state != _RECORDING:
+            if tmpl.deleted:
+                self._status_label.configure(text="This built-in gesture is deleted/disabled", text_color=_ERR)
+            elif trained_sessions:
+                kind_text = "motion" if tmpl.kind == "motion" else "static"
+                self._status_label.configure(
+                    text=f"✓ {trained_sessions}/{total_sessions} trained {kind_text} sessions",
+                    text_color=_ACC,
+                )
+            elif total_sessions:
+                if kind == "motion":
+                    self._status_label.configure(
+                        text="Sessions exist, but movement is too short or weak",
+                        text_color=_YEL,
+                    )
+                else:
+                    self._status_label.configure(
+                        text=f"Sessions exist, but each needs at least {minimum} samples",
+                        text_color=_YEL,
+                    )
+            else:
+                self._status_label.configure(
+                    text="No sessions yet — record one or more training sessions",
+                    text_color=_DIM,
+                )
 
     def _poll_recording(self) -> None:
         try:
             if self._rec_state == _RECORDING and self._sel_name:
                 tmpl = self._find_template(self._sel_name)
-                n    = len(state.recording_samples)
-                if tmpl is not None:
-                    tmpl.samples = list(state.recording_samples[:n])
-                    self._update_sample_display(tmpl)
-                if n >= RECORD_SAMPLES:
-                    self._stop_record()
+                kind = state.recording_mode
+                self._update_sample_display(tmpl, kind_override=kind)
+                if kind == "motion":
+                    n = len(state.recording_motion_points)
+                    if n >= state.recording_target_frames:
+                        self._finish_current_session(keep_recording=True)
+                else:
+                    n = len(state.recording_samples)
+                    if n >= state.recording_target_frames:
+                        self._finish_current_session(keep_recording=True)
         except Exception:
             pass
         if self._win.winfo_exists():
             self._win.after(100, self._poll_recording)
 
-    # ── Action type UI ─────────────────────────────────────────────────────
-
     def _on_action_type_change(self) -> None:
         atype = self._action_var.get()
         self._hotkey_frame.pack_forget()
         self._script_frame.pack_forget()
-        self._movement_frame.pack_forget()
-
         if atype == "none":
             self._action_hint.configure(text="No action will be triggered.", text_color=_DIM)
         elif atype == "hotkey":
             self._hotkey_frame.pack(fill="x", pady=(4, 0))
             self._action_hint.configure(
-                text="Supports all keys: arrows ◄►▲▼, F1–F24, Ctrl/Shift/Alt, media keys…",
+                text="Supports arrows, F-keys, Ctrl/Shift/Alt, media keys, and more.",
                 text_color=_DIM,
             )
         elif atype == "script":
             self._script_frame.pack(fill="x", pady=(4, 0))
             self._action_hint.configure(text="Any executable, .py, .bat, .sh, …", text_color=_DIM)
-        elif atype == "movement":
-            self._movement_frame.pack(fill="x", pady=(4, 0))
-            self._action_hint.configure(
-                text="Enable Mouse Control in Settings to use movement mode.",
-                text_color=_MOV,
-            )
 
     def _browse_script(self) -> None:
         path = fd.askopenfilename(
-            parent=self._win, title="Select Script or Executable",
-            filetypes=[("All files", "*.*"), ("Python", "*.py"),
-                       ("Batch", "*.bat *.cmd"), ("Shell", "*.sh"), ("Executable", "*.exe")],
+            parent=self._win,
+            title="Select Script or Executable",
+            filetypes=[
+                ("All files", "*.*"),
+                ("Python", "*.py"),
+                ("Batch", "*.bat *.cmd"),
+                ("Shell", "*.sh"),
+                ("Executable", "*.exe"),
+            ],
         )
         if path:
             self._action_value_var.set(path)
-
-    # ── Save / Delete ─────────────────────────────────────────────────────
 
     def _save(self) -> None:
         if self._rec_state == _RECORDING:
@@ -628,16 +1049,25 @@ class _GestureTrainer:
             self._status_label.configure(text="⚠ Name cannot be empty", text_color=_ERR)
             return
 
+        tmpl = self._find_template(self._sel_name) if self._sel_name else None
+        if tmpl is None:
+            tmpl = self._ensure_template(name, builtin=self._sel_is_builtin)
+
         if not self._sel_is_builtin and self._sel_name and name != self._sel_name:
-            tmpl = self._find_template(self._sel_name)
-            if tmpl:
-                if self._sel_name in state.GESTURE_BINDINGS:
-                    state.GESTURE_BINDINGS[name] = state.GESTURE_BINDINGS.pop(self._sel_name)
-                tmpl.name = name
-                reset_cooldown(name)
+            if self._sel_name in state.GESTURE_BINDINGS:
+                state.GESTURE_BINDINGS[name] = state.GESTURE_BINDINGS.pop(self._sel_name)
+            tmpl.name = name
             self._sel_name = name
+            reset_cooldown(name)
+
+        tmpl.kind = self._selected_gesture_kind()
+        tmpl.deleted = False
+        tmpl.motion_tolerance = self._motion_tolerance_var.get()
+        tmpl.builtin = self._sel_is_builtin
 
         atype = self._action_var.get()
+        if atype not in _ACTION_TYPES:
+            atype = "none"
 
         if atype == "hotkey":
             aval = self._hotkey_var.get().strip()
@@ -653,22 +1083,20 @@ class _GestureTrainer:
                 if not ok:
                     self._action_hint.configure(text=f"⚠ {err}", text_color=_ERR)
                     return
-        elif atype == "movement":
-            aval = "movement"
-            if not state.MOUSE_ENABLED:
-                state.MOUSE_ENABLED = True
         else:
             aval = ""
 
         state.GESTURE_BINDINGS[name] = {"type": atype, "value": aval}
         reset_cooldown(name)
         save_settings()
-        self._status_label.configure(text="✓ Saved", text_color=_ACC)
+        self._del_btn.configure(text="Delete Gesture")
         self._refresh_list()
-        print(f"[TRAINER] saved gesture '{name}', action={atype}:{aval}")
+        self._refresh_sessions()
+        self._update_sample_display(tmpl, kind_override=tmpl.kind)
+        self._status_label.configure(text="✓ Saved", text_color=_ACC)
 
     def _delete(self) -> None:
-        if self._sel_is_builtin or self._sel_name is None:
+        if self._sel_name is None:
             return
         self._delete_by_name(self._sel_name)
 
@@ -677,26 +1105,44 @@ class _GestureTrainer:
             self._stop_record()
         self._stop_key_capture()
 
-        state.CUSTOM_GESTURE_TEMPLATES = [
-            t for t in state.CUSTOM_GESTURE_TEMPLATES if t.name != name
-        ]
-        state.GESTURE_BINDINGS.pop(name, None)
+        tmpl = self._find_template(name)
+        is_builtin = name in BUILTIN_ENTRIES
 
-        if self._sel_name == name:
-            self._sel_name = None
-            self._set_edit_active(False)
+        if is_builtin:
+            tmpl = self._ensure_template(name, builtin=True)
+            if tmpl.deleted:
+                tmpl.deleted = False
+                self._status_label.configure(text=f"Restored '{name}'", text_color=_ACC)
+                self._del_btn.configure(text="Delete Gesture")
+            else:
+                tmpl.deleted = True
+                tmpl.clear_sessions()
+                state.GESTURE_BINDINGS.pop(name, None)
+                self._status_label.configure(text=f"Deleted '{name}'", text_color=_DIM)
+                self._del_btn.configure(text="Restore Gesture")
+        else:
+            state.CUSTOM_GESTURE_TEMPLATES = [item for item in state.CUSTOM_GESTURE_TEMPLATES if item.name != name]
+            state.GESTURE_BINDINGS.pop(name, None)
+            if self._sel_name == name:
+                self._sel_name = None
+                self._set_edit_active(False)
+            self._status_label.configure(text=f"Deleted '{name}'", text_color=_DIM)
 
         save_settings()
         self._refresh_list()
-        self._status_label.configure(text=f"Deleted '{name}'", text_color=_DIM)
-        print(f"[TRAINER] deleted gesture '{name}'")
-
-    # ── Utility ───────────────────────────────────────────────────────────
+        self._refresh_sessions()
+        if self._sel_name:
+            current = self._find_template(self._sel_name)
+            if current is not None:
+                self._update_sample_display(current, kind_override=current.kind)
 
     def _section(self, text: str) -> None:
         ctk.CTkLabel(
-            self._edit_scroll, text=text,
-            font=ctk.CTkFont("Consolas", 10, "bold"), text_color=_ACC, anchor="w",
+            self._edit_scroll,
+            text=text,
+            font=ctk.CTkFont("Consolas", 10, "bold"),
+            text_color=_ACC,
+            anchor="w",
         ).pack(fill="x", pady=(6, 2))
 
     def _sep(self) -> None:
@@ -704,18 +1150,35 @@ class _GestureTrainer:
 
     def _set_edit_active(self, active: bool) -> None:
         state_ = "normal" if active else "disabled"
-        for w in [self._name_entry, self._rec_btn, self._clear_btn,
-                  self._action_entry, self._save_btn, self._del_btn,
-                  self._key_capture_btn, self._clear_hotkey_btn]:
+        for widget in [
+            self._name_entry,
+            self._rec_btn,
+            self._clear_btn,
+            self._action_entry,
+            self._save_btn,
+            self._del_btn,
+            self._key_capture_btn,
+            self._clear_hotkey_btn,
+            self._session_batch_entry,
+            self._motion_seconds_entry,
+        ]:
             try:
-                w.configure(state=state_)
+                widget.configure(state=state_)
             except Exception:
                 pass
+        self._motion_tolerance_slider.configure(state=state_ if self._selected_gesture_kind() == "motion" else "disabled")
+        self._set_kind_buttons_state(active and not self._sel_is_builtin)
 
     def _on_close(self) -> None:
         if self._rec_state == _RECORDING:
             self._stop_record()
         self._stop_key_capture()
+        state.recording_samples = []
+        state.recording_motion_points = []
+        state.recording_mode = "static"
+        state.recording_target_frames = RECORD_SAMPLES
+        state.recording_batch_total = 1
+        state.recording_batch_remaining = 0
         state.gesture_trainer_open = False
         print("[TRAINER] closed")
         self._win.destroy()

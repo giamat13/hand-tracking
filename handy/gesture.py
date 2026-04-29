@@ -55,7 +55,12 @@ def classify_gesture(up: list[bool], lm_list: list) -> str:
     return f"{count} Fingers"
 
 
-def classify_with_custom(up: list[bool], lm_list: list, custom_templates: list) -> str:
+def classify_with_custom(
+    up: list[bool],
+    lm_list: list,
+    custom_templates: list,
+    motion_points: list | None = None,
+) -> str:
     """
     Full gesture classifier: custom templates take priority over built-in.
 
@@ -68,11 +73,21 @@ def classify_with_custom(up: list[bool], lm_list: list, custom_templates: list) 
     up              : output of fingers_up()
     lm_list         : raw landmark list from MediaPipe
     custom_templates: list[GestureTemplate] from state.CUSTOM_GESTURE_TEMPLATES
+    motion_points   : recent palm-center points for motion-gesture matching
     """
     if custom_templates:
-        from .custom_gestures import match_custom_gesture
-        custom_hit = match_custom_gesture(lm_list, custom_templates)
+        from .custom_gestures import is_deleted_builtin, match_custom_gesture
+        custom_hit = match_custom_gesture(
+            lm_list,
+            custom_templates,
+            motion_points=motion_points,
+        )
         if custom_hit:
             return custom_hit
+
+        builtin_hit = classify_gesture(up, lm_list)
+        if is_deleted_builtin(builtin_hit, custom_templates):
+            return "Unknown"
+        return builtin_hit
 
     return classify_gesture(up, lm_list)
