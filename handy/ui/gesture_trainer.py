@@ -203,7 +203,7 @@ class _GestureTrainer:
         self._kind_buttons = []
         for val, label, colour in [
             ("static", "Static (hold pose)", _FG),
-            ("motion", "Motion (move hand)", _MOT),
+            ("motion", "Motion (move hand) - BETA", _YEL),
         ]:
             btn = ctk.CTkRadioButton(
                 scroll,

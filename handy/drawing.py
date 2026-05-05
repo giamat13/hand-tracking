@@ -42,7 +42,7 @@ def draw_info_box(frame, label: str, wx: int, wy: int, color: tuple) -> None:
 def draw_ui(frame, fps: float, hand_count: int) -> None:
     h, w = frame.shape[:2]
     cv2.rectangle(frame, (0, 0), (w, 50), (10, 10, 10), -1)
-    hint = "ESC=quit  S=screenshot  G=settings" + ("  R=reload" if state.DEBUG_MODE else "")
+    hint = "ESC=quit  S=screenshot  G=settings"
     cv2.putText(
         frame, f"HANDY  |  {hint}",
         (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.6, COLOR_TEXT, 1, cv2.LINE_AA,
@@ -61,11 +61,6 @@ def draw_ui(frame, fps: float, hand_count: int) -> None:
         (12, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
         COLOR_TRAIL if state.MOUSE_ENABLED else (100, 100, 100), 1, cv2.LINE_AA,
     )
-    if state.DEBUG_MODE:
-        cv2.putText(
-            frame, "DEBUG",
-            (w - 68, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 80, 255), 2, cv2.LINE_AA,
-        )
 
 
 def draw_loading(frame, dots: int) -> None:

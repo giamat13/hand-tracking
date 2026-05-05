@@ -19,6 +19,6 @@ venv/
 *.log
 *.temp
 
-hand_landmarker.task
+*.task
 
 !Handy.spec

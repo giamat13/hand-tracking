@@ -128,6 +128,7 @@ def _build(root: ctk.CTk) -> None:
     trail_var    = tk.BooleanVar(value=state.SHOW_TRAIL)
     coords_var   = tk.BooleanVar(value=state.SHOW_COORDS)
     mouse_var    = tk.BooleanVar(value=state.MOUSE_ENABLED)
+    beta_var     = tk.BooleanVar(value=state.BETA_MODE)
     smooth_var   = tk.DoubleVar(value=state.SMOOTH)
     speed_var    = tk.DoubleVar(value=state.SPEED)
     dead_var     = tk.DoubleVar(value=state.DEADZONE)
@@ -135,7 +136,6 @@ def _build(root: ctk.CTk) -> None:
     hand_var     = tk.StringVar(value=state.CONTROL_HAND)
     dyn_var      = tk.BooleanVar(value=state.DYNAMIC_SPEED)
     curve_var    = tk.DoubleVar(value=state.SPEED_CURVE)
-    debug_var    = tk.BooleanVar(value=state.DEBUG_MODE)
 
     # ── Display ────────────────────────────────────────────────────
     section("▼  Display")
@@ -189,9 +189,11 @@ def _build(root: ctk.CTk) -> None:
 
     sep()
 
-    # ── Developer ──────────────────────────────────────────────────
-    section("▼  Developer")
-    add_check("Debug mode  (R = hot reload)", debug_var)
+    # ── Beta Testing ───────────────────────────────────────────────
+    section("▼  Beta Testing")
+    beta_cb = add_check("Beta testing mode (movement only)", beta_var)
+
+    sep()
 
     # ── Apply ──────────────────────────────────────────────────────
     def apply():
@@ -200,13 +202,13 @@ def _build(root: ctk.CTk) -> None:
         state.DEADZONE       = int(dead_var.get())
         state.CLICK_COOLDOWN = round(cooldown_var.get(), 1)
         state.MOUSE_ENABLED  = mouse_var.get()
+        state.BETA_MODE      = beta_var.get()
         state.SHOW_LANDMARKS  = landmarks_var.get()
         state.SHOW_TRAIL     = trail_var.get()
         state.SHOW_COORDS    = coords_var.get()
         state.CONTROL_HAND   = hand_var.get()
         state.DYNAMIC_SPEED  = dyn_var.get()
         state.SPEED_CURVE    = round(curve_var.get(), 1)
-        state.DEBUG_MODE     = debug_var.get()
         state.settings_open  = False
         save_settings()
         print("[SETTINGS] apply")

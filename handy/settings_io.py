@@ -17,7 +17,7 @@ import handy.state as state
 # ── Setting keys (scalar values in state) ─────────────────────────────────
 _SETTING_KEYS = [
     "SMOOTH", "SPEED", "DYNAMIC_SPEED", "SPEED_CURVE", "CAM_MARGIN",
-    "DEADZONE", "MOUSE_ENABLED", "CONTROL_HAND", "CLICK_COOLDOWN",
+    "DEADZONE", "MOUSE_ENABLED", "BETA_MODE", "CONTROL_HAND", "CLICK_COOLDOWN",
     "SHOW_TRAIL", "SHOW_COORDS", "SHOW_LANDMARKS",
 ]
 _ACTION_TYPES = {"none", "hotkey", "script"}

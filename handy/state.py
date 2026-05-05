@@ -19,6 +19,8 @@ detector = None
 hands_old = None
 mp_hands = None
 mp_draw = None
+face_detector = None
+mp_face = None
 model_ready: bool = False
 model_error = None
 
@@ -29,9 +31,8 @@ camera_error = None
 # ── Build mode ────────────────────────────────────────────────────
 IS_INSTALLED: bool = False  # set to True by installer build via env var
 
-# ── Debug / hot-reload ─────────────────────────────────────────────
-DEBUG_MODE: bool = False
-FAST_RELOAD: bool = False
+# ── Beta testing mode ─────────────────────────────────────────────
+BETA_MODE: bool = False  # In beta mode, only mouse movement is enabled
 
 # ── User-adjustable settings (changed via settings window) ─────────
 SMOOTH: int = 7
@@ -41,6 +42,7 @@ SPEED_CURVE: float = 2.0
 CAM_MARGIN: float = 0.15
 DEADZONE: int = 8
 MOUSE_ENABLED: bool = False
+BETA_MODE: bool = False
 CONTROL_HAND: str = "Right"
 CLICK_COOLDOWN: float = 0.6
 SHOW_TRAIL: bool = True
@@ -55,6 +57,14 @@ prev_hand_y = None
 smooth_dx: float = 0.0
 smooth_dy: float = 0.0
 last_click: float = 0.0
+
+# ── Head tracking ─────────────────────────────────────────────────
+head_smooth_x = None
+head_smooth_y = None
+prev_head_x = None
+prev_head_y = None
+head_smooth_dx: float = 0.0
+head_smooth_dy: float = 0.0
 
 # ── UI ─────────────────────────────────────────────────────────────
 settings_open: bool = False

@@ -194,6 +194,71 @@ def _process_frame(frame, h: int, w: int) -> int:
         return len(results.multi_hand_landmarks)
 
 
+def _process_face(frame, h: int, w: int) -> bool:
+    """Detect face and update head tracking. Returns True if face detected."""
+    if not state.face_detector:
+        return False
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    try:
+        if state.USE_NEW_API:
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            timestamp = int(time.time() * 1000)
+            result = state.face_detector.detect_for_video(mp_image, timestamp)
+            if not result.face_landmarks:
+                return False
+            # Use nose tip (landmark 1) for head position
+            face_lm = result.face_landmarks[0]
+            nose_x = face_lm[1].x
+            nose_y = face_lm[1].y
+        else:
+            # Legacy face detection not implemented
+            return False
+
+        # Convert to screen coordinates
+        head_x = int(nose_x * w)
+        head_y = int(nose_y * h)
+
+        # Debug: draw a circle on the nose
+        cv2.circle(frame, (head_x, head_y), 5, (0, 255, 0), -1)
+        cv2.putText(frame, "HEAD", (head_x + 10, head_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+        # Update head tracking
+        if state.head_smooth_x is None or state.prev_head_x is None:
+            state.head_smooth_x = head_x
+            state.head_smooth_y = head_y
+            state.prev_head_x = head_x
+            state.prev_head_y = head_y
+        else:
+            # Smooth the position
+            state.head_smooth_x = state.head_smooth_x * (state.SMOOTH / 100) + head_x * (1 - state.SMOOTH / 100)
+            state.head_smooth_y = state.head_smooth_y * (state.SMOOTH / 100) + head_y * (1 - state.SMOOTH / 100)
+
+            # Calculate movement deltas
+            dx = state.head_smooth_x - state.prev_head_x
+            dy = state.head_smooth_y - state.prev_head_y
+
+            # Apply deadzone
+            if abs(dx) > state.DEADZONE:
+                state.head_smooth_dx = state.head_smooth_dx * 0.8 + dx * 0.2
+            else:
+                state.head_smooth_dx *= 0.9
+
+            if abs(dy) > state.DEADZONE:
+                state.head_smooth_dy = state.head_smooth_dy * 0.8 + dy * 0.2
+            else:
+                state.head_smooth_dy *= 0.9
+
+            state.prev_head_x = state.head_smooth_x
+            state.prev_head_y = state.head_smooth_y
+
+        return True
+    except Exception as e:
+        print(f"[FACE] Error: {e}")
+        return False
+
+
 # ── Camera loop ────────────────────────────────────────────────────────────
 
 def run_camera() -> None:
@@ -264,6 +329,7 @@ def run_camera() -> None:
             hand_count = 0
         else:
             hand_count = _process_frame(frame, h, w)
+            face_detected = _process_face(frame, h, w)
             draw_ui(frame, fps_avg, hand_count)
 
         # Recording overlay (drawn on top of everything)
@@ -289,8 +355,6 @@ def run_camera() -> None:
                 state.ui_queue.put("open_gesture_trainer")
             else:
                 print("[HOTKEY] gesture trainer already open, request ignored")
-        elif _key_matches(key, "rR") and state.DEBUG_MODE:
-            _do_hot_reload()
         elif _key_matches(key, "sS"):
             fname = f"screenshot_{screenshot_cnt:03d}.png"
             cv2.imwrite(fname, frame)
@@ -300,13 +364,3 @@ def run_camera() -> None:
     cap.release()
     cv2.destroyAllWindows()
     os.kill(os.getpid(), 9)
-
-
-# ── Hot reload ─────────────────────────────────────────────────────────────
-
-def _do_hot_reload() -> None:
-    """Restart the process with --fast-reload (cross-platform subprocess)."""
-    script = os.path.abspath(sys.argv[0])
-    subprocess.Popen([sys.executable, script, "--fast-reload"])
-    time.sleep(0.3)
-    os._exit(0)

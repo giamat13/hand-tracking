@@ -41,11 +41,6 @@ def _check_queue(root: ctk.CTk) -> None:
 
 
 def main() -> None:
-    state.FAST_RELOAD = "--fast-reload" in sys.argv
-
-    if state.FAST_RELOAD:
-        state.DEBUG_MODE = True
-
     load_settings()
 
     init_screen_size()
