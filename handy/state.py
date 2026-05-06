@@ -65,6 +65,7 @@ prev_head_x = None
 prev_head_y = None
 head_smooth_dx: float = 0.0
 head_smooth_dy: float = 0.0
+face_landmarks = None  # Store all face landmarks for better accuracy
 
 # ── UI ─────────────────────────────────────────────────────────────
 settings_open: bool = False

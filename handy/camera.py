@@ -210,19 +210,42 @@ def _process_face(frame, h: int, w: int) -> bool:
             result = state.face_detector.detect_for_video(mp_image, timestamp)
             if not result.face_landmarks:
                 return False
-            # Use nose tip (landmark 1) for head position
+            # Store all face landmarks for better accuracy
             face_lm = result.face_landmarks[0]
-            nose_x = face_lm[1].x
-            nose_y = face_lm[1].y
+            state.face_landmarks = [(lm.x, lm.y, lm.z) for lm in face_lm]
+
+            # Use multiple facial landmarks for better head position accuracy
+            # Key landmarks: nose tip (1), nose bridge (168), chin (152), forehead center (10)
+            key_landmarks = [1, 168, 152, 10]  # nose tip, nose bridge, chin, forehead
+            valid_landmarks = [i for i in key_landmarks if i < len(face_lm)]
+            
+            if valid_landmarks:
+                avg_x = sum(face_lm[i].x for i in valid_landmarks) / len(valid_landmarks)
+                avg_y = sum(face_lm[i].y for i in valid_landmarks) / len(valid_landmarks)
+            else:
+                # Fallback to nose tip if no valid landmarks
+                avg_x = face_lm[1].x if len(face_lm) > 1 else face_lm[0].x
+                avg_y = face_lm[1].y if len(face_lm) > 1 else face_lm[0].y
         else:
             # Legacy face detection not implemented
             return False
 
         # Convert to screen coordinates
-        head_x = int(nose_x * w)
-        head_y = int(nose_y * h)
+        head_x = int(avg_x * w)
+        head_y = int(avg_y * h)
 
-        # Debug: draw a circle on the nose
+        # Debug: draw multiple face landmarks
+        if state.SHOW_LANDMARKS and state.face_landmarks:
+            for i, (lm_x, lm_y, lm_z) in enumerate(state.face_landmarks):
+                px = int(lm_x * w)
+                py = int(lm_y * h)
+                # Draw key landmarks in different colors
+                if i in [1, 168, 152, 10]:  # key facial points
+                    cv2.circle(frame, (px, py), 3, (0, 255, 0), -1)  # green for key points
+                else:
+                    cv2.circle(frame, (px, py), 2, (255, 255, 0), -1)  # cyan for other points
+
+        # Draw head position indicator
         cv2.circle(frame, (head_x, head_y), 5, (0, 255, 0), -1)
         cv2.putText(frame, "HEAD", (head_x + 10, head_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
