@@ -7,7 +7,7 @@
   "DEADZONE": 8,
   "MOUSE_ENABLED": true,
   "BETA_MODE": false,
-  "CONTROL_HAND": "Right",
+  "CONTROL_HAND": "Head",
   "CLICK_COOLDOWN": 0.6,
   "SHOW_TRAIL": true,
   "SHOW_COORDS": true,

@@ -164,9 +164,9 @@ def _build(root: ctk.CTk) -> None:
         text_color=_FG, anchor="w",
     ).grid(row=r, column=0, pady=4, sticky="w")
     radio_frame = ctk.CTkFrame(grid, fg_color=_BG)
-    radio_frame.grid(row=r, column=1, columnspan=2, sticky="w")
+    radio_frame.grid(row=r, column=1, columnspan=2, sticky="w", padx=(8, 0))
     radio_btns = []
-    for val in ("Right", "Left", "Both"):
+    for idx, val in enumerate(("Right", "Left", "Both", "Head")):
         rb = ctk.CTkRadioButton(
             radio_frame, text=val, variable=hand_var, value=val,
             font=ctk.CTkFont("Consolas", 10),
@@ -174,7 +174,7 @@ def _build(root: ctk.CTk) -> None:
             fg_color=_ACC, hover_color="#00cc77",
             border_color=_ACC,
         )
-        rb.pack(side="left", padx=6)
+        rb.grid(row=idx // 2, column=idx % 2, padx=6, pady=2, sticky="w")
         radio_btns.append(rb)
 
     mouse_dependents = [s_smooth, s_speed, dyn_cb, s_curve, s_dead, s_cooldown] + radio_btns

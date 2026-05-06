@@ -23,7 +23,7 @@ from .drawing import (
     draw_ui,
 )
 from .gesture import classify_with_custom, fingers_up
-from .mouse import move_mouse, reset_anchor
+from .mouse import move_mouse, move_mouse_head, reset_anchor
 from .actions import execute_action
 
 
@@ -166,7 +166,8 @@ def _process_frame(frame, h: int, w: int) -> int:
         if not result.hand_landmarks:
             state.trails.clear()
             state.motion_history.clear()
-            reset_anchor()
+            if state.CONTROL_HAND != "Head":
+                reset_anchor()
             return 0
         for idx, (hand_lms, hand_info) in enumerate(
             zip(result.hand_landmarks, result.handedness)
@@ -181,7 +182,8 @@ def _process_frame(frame, h: int, w: int) -> int:
         if not results.multi_hand_landmarks:
             state.trails.clear()
             state.motion_history.clear()
-            reset_anchor()
+            if state.CONTROL_HAND != "Head":
+                reset_anchor()
             return 0
         for idx, (hand_lm, hand_info) in enumerate(
             zip(results.multi_hand_landmarks, results.multi_handedness)
@@ -330,6 +332,8 @@ def run_camera() -> None:
         else:
             hand_count = _process_frame(frame, h, w)
             face_detected = _process_face(frame, h, w)
+            if state.CONTROL_HAND == "Head" and state.MOUSE_ENABLED and face_detected:
+                move_mouse_head()
             draw_ui(frame, fps_avg, hand_count)
 
         # Recording overlay (drawn on top of everything)
